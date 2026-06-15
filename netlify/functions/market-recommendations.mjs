@@ -87,18 +87,27 @@ async function run(input, env, forceDeterministic = false) {
     fundCands = fundCands.sort((a, b) => rank(a.industry) - rank(b.industry));
   }
 
-  // ---- Fetch + analyze each candidate ----
-  const analyzedStocks = [];
-  for (const meta of stockCands.slice(0, 25)) {
-    const data = await safeGet(() => provider.getStock(meta.ticker));
-    if (!data || data.price == null) continue;
-    analyzedStocks.push(analyzeStock(meta, data, strategyKey, input, overlapSet));
-  }
-  const analyzedFunds = [];
-  for (const meta of fundCands.slice(0, 12)) {
-    const data = await safeGet(() => provider.getFund(meta.ticker));
-    if (!data || data.price == null) continue;
-    analyzedFunds.push(analyzeFund(meta, data, input, overlapSet));
+  // ---- Fetch + analyze each candidate (concurrent within each category) ----
+  const analyzedStocks = (await Promise.all(
+    stockCands.slice(0, 25).map(async meta => {
+      const data = await safeGet(() => provider.getStock(meta.ticker));
+      if (!data || data.price == null) return null;
+      return analyzeStock(meta, data, strategyKey, input, overlapSet);
+    })
+  )).filter(Boolean);
+
+  const analyzedFunds = (await Promise.all(
+    fundCands.slice(0, 12).map(async meta => {
+      const data = await safeGet(() => provider.getFund(meta.ticker));
+      if (!data || data.price == null) return null;
+      return analyzeFund(meta, data, input, overlapSet);
+    })
+  )).filter(Boolean);
+
+  // If a live provider returned nothing (auth failure, rate limit, or timeout on
+  // every ticker), throw so the caller's catch block activates the demo fallback.
+  if (!provider.isDemo && analyzedStocks.length === 0 && analyzedFunds.length === 0) {
+    throw new Error('Live provider returned no market data; switching to demo.');
   }
 
   // ---- Shortlist (deterministic ranking) ----

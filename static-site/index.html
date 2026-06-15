@@ -1421,9 +1421,27 @@ Respond in valid JSON only, no markdown fences:
         portfolio:m.considerPortfolio?this.s.port.map(h=>({ticker:h.tk,name:h.nm,note:h.note||''})):[],
         watchlist:m.considerWatchlist?this.s.wl.map(h=>({ticker:h.tk,name:h.nm,note:h.note||''})):[]
       };
-      const r=await fetch('/.netlify/functions/market-recommendations',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
+      let r;
+      try{r=await fetch('/.netlify/functions/market-recommendations',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});}
+      catch(netErr){
+        clearInterval(iv);
+        const isFile=window.location.protocol==='file:';
+        throw new Error(isFile?'Market Recommendations requires the deployed Netlify site — open your Netlify URL instead of this local file.':'Network error — check your connection and try again. ('+netErr.message+')');
+      }
       clearInterval(iv);
-      if(!r.ok){let msg='Request failed.';try{const e=await r.json();msg=e.error||msg;}catch{}throw new Error(msg);}
+      if(!r.ok){
+        let serverMsg='';try{const e=await r.json();serverMsg=e.error||'';}catch{}
+        console.error('[market-recs] HTTP '+r.status+': '+(serverMsg||r.statusText));
+        const s=r.status;
+        let msg;
+        if(s===404)msg='Function endpoint not found. The site may need to be redeployed.';
+        else if(s===400)msg=serverMsg||'Invalid request parameters — check your selections.';
+        else if(s===429)msg='Rate limit reached. Please wait a moment and try again.';
+        else if(s===401||s===403)msg='Provider authentication error ('+s+'). Check API credentials in Netlify environment variables.';
+        else if(s>=500)msg=serverMsg||'Server error ('+s+'). The service may be temporarily unavailable — try again in a moment.';
+        else msg=serverMsg||'Request failed (HTTP '+s+').';
+        throw new Error(msg);
+      }
       const data=await r.json();
       m.result=data;m.loading=false;this.save();
       if(status)status.textContent='Recommendations ready.';
@@ -1432,7 +1450,7 @@ Respond in valid JSON only, no markdown fences:
       clearInterval(iv);
       m.loading=false;m.error=err.message;this.save();
       if(status)status.textContent='Error: '+err.message;
-      if(res)res.innerHTML=`<div class="alert al-d" role="alert">⚠ ${this.esc(err.message)}<br><span style="font-size:12px;opacity:.85">If you are running the standalone file directly, the Market Recommendations server function is only available on the deployed Netlify site. Demo data requires no keys once deployed.</span></div>`;
+      if(res)res.innerHTML=`<div class="alert al-d" role="alert">⚠ ${this.esc(err.message)}</div>`;
     }finally{
       const b=document.getElementById('mkt-gen');
       if(b){b.disabled=false;b.textContent='Generate Market Recommendations';}

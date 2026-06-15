@@ -116,7 +116,7 @@ async function callOnce(env, system, userContent, timeoutMs) {
 }
 
 export async function getClaudeRecommendations(env, system, userContent) {
-  const timeoutMs = 25000;
+  const timeoutMs = 18000; // kept under Netlify's 26s function limit (data fetch + overhead)
   try {
     const out = await callOnce(env, system, userContent, timeoutMs);
     if (out) return out;

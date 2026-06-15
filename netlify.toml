@@ -10,3 +10,5 @@ NETLIFY_NEXT_PLUGIN_SKIP = "true"
 [functions]
 directory = "netlify/functions"
 node_bundler = "esbuild"
+# Extend to the Netlify maximum to accommodate concurrent Alpaca calls + Claude.
+timeout = 26
