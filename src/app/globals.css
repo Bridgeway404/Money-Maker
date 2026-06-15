@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    border-color: theme('colors.zinc.800');
+    scrollbar-color: theme('colors.zinc.700') transparent;
+    scrollbar-width: thin;
+  }
+
+  body {
+    background-color: theme('colors.zinc.950');
+    color: theme('colors.zinc.100');
+  }
+
+  ::selection {
+    background-color: theme('colors.emerald.500 / 30%');
+  }
+}
+
+@layer utilities {
+  .line-clamp-2 {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .line-clamp-3 {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  .prose-finance {
+    @apply text-zinc-300 leading-relaxed;
+  }
+
+  .prose-finance p {
+    @apply mb-4;
+  }
+
+  .prose-finance strong {
+    @apply text-zinc-100 font-semibold;
+  }
+}
