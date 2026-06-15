@@ -230,12 +230,46 @@ input[type=range]{width:100%;accent-color:var(--green);cursor:pointer}
 .sum-row:last-child{border-bottom:none}
 .sum-k{font-size:13px;color:var(--muted)}
 .sum-v{font-size:13px;font-weight:500}
+/* MARKET RECOMMENDATIONS */
+.strat-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px}
+.strat-card{text-align:left;background:var(--bg-el);border:1px solid var(--border);border-radius:var(--rl);padding:18px;cursor:pointer;transition:all .15s;color:var(--text);font-family:inherit;width:100%}
+.strat-card:hover{border-color:var(--green)}
+.strat-card.sel{background:var(--green-d);border-color:var(--green)}
+.strat-card .sc-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.strat-card .sc-t{font-size:15px;font-weight:700}
+.strat-card .sc-z{font-size:11px;color:var(--muted);margin-bottom:10px}
+.strat-card ul{list-style:none;padding:0;margin:0}
+.strat-card li{font-size:12px;color:var(--text2);padding:2px 0 2px 16px;position:relative}
+.strat-card li::before{content:'›';position:absolute;left:2px;color:var(--green)}
+.strat-card.sel li{color:var(--text)}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;background:var(--bg-el);border:1px solid var(--border);border-radius:20px;font-size:12px;cursor:pointer;transition:all .15s;color:var(--text2);font-family:inherit}
+.chip:hover{border-color:var(--green)}
+.chip.sel{background:var(--green-d);border-color:var(--green);color:var(--green)}
+.chip.sel-x{background:var(--red-d);border-color:var(--red);color:var(--red)}
+.mkt-env{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-bottom:6px}
+.mkt-meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:14px 0}
+.mkt-meta .mm{background:var(--bg-el);border-radius:8px;padding:9px 11px}
+.mkt-meta .mm-l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.mkt-meta .mm-v{font-size:13px;font-weight:600;margin-top:2px}
+.rec .rec-sub{font-size:11px;color:var(--muted);margin-bottom:10px}
+.rec .km{margin-top:10px;border-top:1px solid var(--border-sub);padding-top:9px}
+.rec .km-row{display:flex;justify-content:space-between;font-size:11px;padding:2px 0;gap:8px}
+.rec .km-row .km-l{color:var(--muted)}
+.rec .km-row .km-v{color:var(--text);font-weight:500;text-align:right}
+.rec .km-row .km-s{color:var(--muted);font-size:10px}
+.rec-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.risk-list{list-style:none;padding:0;margin:8px 0 0}
+.risk-list li{font-size:12px;color:var(--text2);padding:2px 0 2px 15px;position:relative}
+.risk-list li::before{content:'▴';position:absolute;left:0;color:var(--yellow);font-size:9px;top:3px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
+button:focus-visible,.chip:focus-visible,.strat-card:focus-visible,.ni:focus-visible,a:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 @media(max-width:768px){
   .layout{grid-template-columns:1fr}
   .sidebar{display:none}
   .hero h1{font-size:30px}
   .g2,.g3{grid-template-columns:1fr}
   .sr-res{grid-template-columns:1fr}
+  .strat-grid{grid-template-columns:1fr}
   .land-nav{padding:14px 20px}
   .hero{padding:44px 20px 36px}
   .feats{padding:36px 20px}
@@ -306,13 +340,15 @@ const App = {
     wl:[], port:[], reports:{}, recs:{}, chats:{},
     obStep:0, obData:{},
     screenerResult:null, activeTab:'overview',
+    market:{strategy:'',preferredIndustries:[],excludedIndustries:[],investmentType:'both',riskTolerance:'',investmentAmount:'',holdingPeriod:'',considerPortfolio:true,considerWatchlist:true,loading:false,result:null,error:null},
     settings:{apiKey:'',weights:{industryLeadership:25,cashFlow:20,earnings:20,debtEquity:10,emaDistance:15,affordability:5,expiration:5}}
   },
 
   load(){
     try{
       const d=localStorage.getItem('leaps_app');
-      if(d){const p=JSON.parse(d);this.s={...this.s,...p,page:'landing',params:{},obStep:0,obData:{},screenerResult:null,activeTab:'overview'}}
+      if(d){const p=JSON.parse(d);this.s={...this.s,...p,page:'landing',params:{},obStep:0,obData:{},screenerResult:null,activeTab:'overview'};
+        this.s.market={...this.s.market,...(p.market||{}),loading:false,error:null};}
     }catch(e){}
   },
 
@@ -334,7 +370,7 @@ const App = {
     if(!user){this.go('login');return}
     if(!ob&&page!=='onboarding'){this.go('onboarding');return}
     if(page==='onboarding'){app.innerHTML=this.pgOnboarding();this.bind();return}
-    const pages={dashboard:()=>this.pgDashboard(),screener:()=>this.pgScreener(),research:()=>this.pgResearch(),leaps:()=>this.pgLeaps(),watchlist:()=>this.pgWatchlist(),portfolio:()=>this.pgPortfolio(),settings:()=>this.pgSettings()};
+    const pages={dashboard:()=>this.pgDashboard(),market:()=>this.pgMarket(),screener:()=>this.pgScreener(),research:()=>this.pgResearch(),leaps:()=>this.pgLeaps(),watchlist:()=>this.pgWatchlist(),portfolio:()=>this.pgPortfolio(),settings:()=>this.pgSettings()};
     const content=(pages[page]||pages.dashboard)();
     app.innerHTML=this.layout(content,page);
     this.bind();
@@ -344,6 +380,7 @@ const App = {
     const {user}=this.s;
     const nav=[
       {id:'dashboard',icon:'◈',label:'Dashboard'},
+      {id:'market',icon:'◇',label:'Market Recommendations'},
       {id:'screener',icon:'⊞',label:'Stock Screener'},
       {id:'research',icon:'◎',label:'AI Research'},
       {id:'leaps',icon:'◆',label:'LEAPS Ideas'},
@@ -355,14 +392,14 @@ const App = {
     ];
     const navHtml=nav.map(n=>{
       if(!n)return`<div class="nav-sec">Data</div>`;
-      if(n.label==='Stock Screener'&&nav.indexOf(n)===1)return`<div class="nav-sec">Research</div><div class="ni${active===n.id?' active':''}" onclick="App.go('${n.id}')">${n.icon} ${n.label}</div>`;
+      if(n.id==='screener')return`<div class="nav-sec">Research</div><div class="ni${active===n.id?' active':''}" onclick="App.go('${n.id}')">${n.icon} ${n.label}</div>`;
       if(n.id==='watchlist')return`<div class="nav-sec">My Data</div><div class="ni${active===n.id?' active':''}" onclick="App.go('${n.id}')">${n.icon} ${n.label}</div>`;
       if(n.id==='settings')return`<div class="nav-sec">Account</div><div class="ni${active===n.id?' active':''}" onclick="App.go('${n.id}')">${n.icon} ${n.label}</div>`;
       return`<div class="ni${active===n.id?' active':''}" onclick="App.go('${n.id}')">${n.icon} ${n.label}</div>`;
     }).join('');
     const av=user.name?user.name[0].toUpperCase():'U';
-    const titles={dashboard:'Dashboard',screener:'Stock Screener',research:'AI Research Reports',leaps:'LEAPS Recommendations',watchlist:'My Watchlist',portfolio:'My Portfolio',settings:'Settings'};
-    const subs={dashboard:'Weekly opportunities & quick access',screener:'Evaluate companies against the investment framework',research:'AI-generated equity research reports',leaps:'Long-term call option recommendations',watchlist:'Stocks you are tracking',portfolio:'Your current holdings',settings:'Configure API key and scoring weights'};
+    const titles={dashboard:'Dashboard',market:'Market Recommendations',screener:'Stock Screener',research:'AI Research Reports',leaps:'LEAPS Recommendations',watchlist:'My Watchlist',portfolio:'My Portfolio',settings:'Settings'};
+    const subs={dashboard:'Weekly opportunities & quick access',market:'Strategy-based fund & stock ideas',screener:'Evaluate companies against the investment framework',research:'AI-generated equity research reports',leaps:'Long-term call option recommendations',watchlist:'Stocks you are tracking',portfolio:'Your current holdings',settings:'Configure API key and scoring weights'};
     return`<div class="layout">
       <div class="sidebar">
         <div class="sb-logo"><div class="lt">◆ LEAPS Research</div><div class="ls">AI Options Intelligence</div></div>
@@ -917,6 +954,7 @@ Respond in valid JSON only, no markdown fences:
       </div>`).join('')}</div>
     </div>
     <div class="qas" style="margin-bottom:20px">
+      <div class="qa" onclick="App.go('market')"><div class="qa-ic">◇</div><div class="qa-l">Market Recommendations</div></div>
       <div class="qa" onclick="App.go('screener')"><div class="qa-ic">⊞</div><div class="qa-l">Screen a Stock</div></div>
       <div class="qa" onclick="App.go('research')"><div class="qa-ic">◎</div><div class="qa-l">AI Research</div></div>
       <div class="qa" onclick="App.go('leaps')"><div class="qa-ic">◆</div><div class="qa-l">LEAPS Ideas</div></div>
@@ -1262,6 +1300,220 @@ Respond in valid JSON only, no markdown fences:
 
   clearData(){
     localStorage.removeItem('leaps_app');location.reload();
+  },
+
+  // ============================================================
+  // MARKET RECOMMENDATIONS
+  // ============================================================
+  esc(s){
+    if(s==null)return'';
+    return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  },
+
+  mktPrefill(){
+    const m=this.s.market,ob=this.s.ob||{};
+    if(!m.riskTolerance){const r=ob.riskAppetite;m.riskTolerance=['Conservative','Moderate','Aggressive'].includes(r)?r:'Moderate';}
+    if(!m.preferredIndustries.length&&Array.isArray(ob.industries))m.preferredIndustries=[...ob.industries];
+  },
+
+  pgMarket(){
+    this.mktPrefill();
+    const m=this.s.market;
+    const INDS=['Technology','Semiconductors','Financial','Healthcare','Consumer','Industrials'];
+    const stratCard=(name,zone,bullets)=>`<button type="button" role="radio" aria-checked="${m.strategy===name}" class="strat-card${m.strategy===name?' sel':''}" id="strat-${name==='Higher-Growth Opportunities'?'growth':'long'}" onclick="App.mktSelectStrategy('${name}')">
+      <div class="sc-h"><span class="sc-t">${name}</span><span class="badge ${m.strategy===name?'bg':'bw'}">${m.strategy===name?'Selected':'Select'}</span></div>
+      <div class="sc-z">${zone}</div>
+      <ul>${bullets.map(b=>`<li>${b}</li>`).join('')}</ul>
+    </button>`;
+    const chip=(ind,kind)=>{const on=m[kind].includes(ind);const cls=kind==='preferredIndustries'?'sel':'sel-x';return`<button type="button" class="chip${on?' '+cls:''}" aria-pressed="${on}" onclick="App.mktToggleIndustry('${kind}','${ind}',this)">${ind}</button>`;};
+    return `<div class="ph"><div class="pt">Market Recommendations</div><div class="ps">Strategy-driven fund &amp; stock ideas based on your profile</div></div>
+
+    <div class="card" style="margin-bottom:18px">
+      <p style="font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:12px">This tool uses your selected <strong>strategy</strong> and profile to evaluate diversified index funds and individual stocks. It applies deterministic screening (liquidity, quality, and — for long-term ideas — proximity to the 200-week EMA) before ranking. Current market data is used only when a live provider is configured; otherwise results are clearly labeled samples. This is educational research, not guaranteed investment advice.</p>
+      <div class="mkt-env"><span class="badge bb" id="mkt-mode-badge">Mode set after you generate</span></div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <div class="ct" style="margin-bottom:6px">1 · Choose Your Strategy <span style="color:var(--red)">*</span></div>
+      <div class="cs" style="margin-bottom:14px">Only one strategy is active at a time.</div>
+      <div class="strat-grid" role="radiogroup" aria-label="Investment strategy">
+        ${stratCard('Higher-Growth Opportunities','Approx. 6–18 month horizon · higher volatility tolerance',['Prioritizes earnings &amp; revenue growth','Favors relative strength &amp; constructive momentum','Favors strong industry trends &amp; liquidity','Accepts greater downside for greater potential growth'])}
+        ${stratCard('Long-Term Wealth Building','Approx. 3+ year horizon · compounding focus',['Durable competitive advantages','Positive, sustainable cash flow &amp; quality earnings','Manageable debt &amp; industry leadership','Diversified exposure; 200-week EMA as a valuation signal'])}
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <div class="ct" style="margin-bottom:14px">2 · Refine (optional)</div>
+      <div class="fr">
+        <div class="fg"><label class="fl" for="mkt-amt">Approx. investment amount ($)</label><input class="fi" id="mkt-amt" type="number" min="0" step="100" placeholder="${this.esc(this.s.ob?.purchasingPower||'e.g. 10000')}" value="${this.esc(m.investmentAmount)}"></div>
+        <div class="fg"><label class="fl" for="mkt-risk">Risk tolerance</label><select class="fsel" id="mkt-risk">
+          ${['Conservative','Moderate','Aggressive'].map(r=>`<option${m.riskTolerance===r?' selected':''}>${r}</option>`).join('')}
+        </select></div>
+        <div class="fg"><label class="fl" for="mkt-type">Investment type</label><select class="fsel" id="mkt-type">
+          <option value="both"${m.investmentType==='both'?' selected':''}>Funds and stocks</option>
+          <option value="funds"${m.investmentType==='funds'?' selected':''}>Funds only</option>
+          <option value="stocks"${m.investmentType==='stocks'?' selected':''}>Stocks only</option>
+        </select></div>
+        <div class="fg"><label class="fl" for="mkt-hold">Expected holding period</label><input class="fi" id="mkt-hold" placeholder="e.g. 3+ years" value="${this.esc(m.holdingPeriod)}"></div>
+      </div>
+      <div class="fg"><label class="fl">Preferred industries</label><div class="cb-group">${INDS.map(i=>chip(i,'preferredIndustries')).join('')}</div></div>
+      <div class="fg"><label class="fl">Excluded industries</label><div class="cb-group">${INDS.map(i=>chip(i,'excludedIndustries')).join('')}</div></div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:4px">
+        <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:var(--text2);cursor:pointer"><input type="checkbox" id="mkt-port" ${m.considerPortfolio?'checked':''} style="accent-color:var(--green)"> Consider my portfolio (${this.s.port.length})</label>
+        <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:var(--text2);cursor:pointer"><input type="checkbox" id="mkt-watch" ${m.considerWatchlist?'checked':''} style="accent-color:var(--green)"> Consider my watchlist (${this.s.wl.length})</label>
+      </div>
+    </div>
+
+    <div style="margin-bottom:18px">
+      <button class="btn btn-p btn-lg" id="mkt-gen" ${m.strategy?'':'disabled'} onclick="App.genMarket()">Generate Market Recommendations</button>
+      ${m.strategy?'':'<span style="font-size:12px;color:var(--muted);margin-left:10px">Select a strategy to enable</span>'}
+    </div>
+
+    <div id="mkt-status" role="status" aria-live="polite" class="sr-only"></div>
+    <div id="mkt-results">${m.result?this.renderMarket(m.result):''}</div>`;
+  },
+
+  mktSelectStrategy(name){
+    this.s.market.strategy=name;this.save();
+    ['Higher-Growth Opportunities','Long-Term Wealth Building'].forEach(n=>{
+      const id='strat-'+(n==='Higher-Growth Opportunities'?'growth':'long');
+      const el=document.getElementById(id);
+      if(el){const on=n===name;el.classList.toggle('sel',on);el.setAttribute('aria-checked',on);
+        const b=el.querySelector('.badge');if(b){b.textContent=on?'Selected':'Select';b.className='badge '+(on?'bg':'bw');}}
+    });
+    const gen=document.getElementById('mkt-gen');if(gen){gen.disabled=false;const hint=gen.nextElementSibling;if(hint&&hint.tagName==='SPAN')hint.remove();}
+  },
+
+  mktToggleIndustry(kind,ind,btn){
+    const arr=this.s.market[kind];const i=arr.indexOf(ind);
+    if(i>=0)arr.splice(i,1);else arr.push(ind);
+    this.save();
+    const on=arr.includes(ind);const cls=kind==='preferredIndustries'?'sel':'sel-x';
+    btn.classList.toggle(cls,on);btn.setAttribute('aria-pressed',on);
+  },
+
+  async genMarket(){
+    const m=this.s.market;
+    if(!m.strategy){this.flash('err','Please select a strategy first.');return}
+    if(m.loading)return;
+    // Gather current form values
+    m.investmentAmount=document.getElementById('mkt-amt')?.value||'';
+    m.riskTolerance=document.getElementById('mkt-risk')?.value||'Moderate';
+    m.investmentType=document.getElementById('mkt-type')?.value||'both';
+    m.holdingPeriod=document.getElementById('mkt-hold')?.value||'';
+    m.considerPortfolio=!!document.getElementById('mkt-port')?.checked;
+    m.considerWatchlist=!!document.getElementById('mkt-watch')?.checked;
+    m.loading=true;m.error=null;this.save();
+    const btn=document.getElementById('mkt-gen');
+    if(btn){btn.disabled=true;btn.textContent='Generating…';}
+    const res=document.getElementById('mkt-results');
+    const status=document.getElementById('mkt-status');
+    const stages=['Reviewing your strategy','Screening eligible funds and companies','Comparing candidates','Preparing research summaries'];
+    let si=0;
+    const tick=()=>{if(status)status.textContent=stages[si]+'…';if(res)res.innerHTML=`<div class="loading"><div class="spin"></div><p>${stages[si]}…</p></div>`;};
+    tick();const iv=setInterval(()=>{si=(si+1)%stages.length;tick();},700);
+    try{
+      const payload={
+        strategy:m.strategy,investmentAmount:m.investmentAmount?Number(m.investmentAmount):null,
+        riskTolerance:m.riskTolerance,preferredIndustries:m.preferredIndustries,excludedIndustries:m.excludedIndustries,
+        investmentType:m.investmentType,holdingPeriod:m.holdingPeriod,
+        considerPortfolio:m.considerPortfolio,considerWatchlist:m.considerWatchlist,
+        portfolio:m.considerPortfolio?this.s.port.map(h=>({ticker:h.tk,name:h.nm,note:h.note||''})):[],
+        watchlist:m.considerWatchlist?this.s.wl.map(h=>({ticker:h.tk,name:h.nm,note:h.note||''})):[]
+      };
+      const r=await fetch('/.netlify/functions/market-recommendations',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
+      clearInterval(iv);
+      if(!r.ok){let msg='Request failed.';try{const e=await r.json();msg=e.error||msg;}catch{}throw new Error(msg);}
+      const data=await r.json();
+      m.result=data;m.loading=false;this.save();
+      if(status)status.textContent='Recommendations ready.';
+      if(res)res.innerHTML=this.renderMarket(data);
+    }catch(err){
+      clearInterval(iv);
+      m.loading=false;m.error=err.message;this.save();
+      if(status)status.textContent='Error: '+err.message;
+      if(res)res.innerHTML=`<div class="alert al-d" role="alert">⚠ ${this.esc(err.message)}<br><span style="font-size:12px;opacity:.85">If you are running the standalone file directly, the Market Recommendations server function is only available on the deployed Netlify site. Demo data requires no keys once deployed.</span></div>`;
+    }finally{
+      const b=document.getElementById('mkt-gen');
+      if(b){b.disabled=false;b.textContent='Generate Market Recommendations';}
+    }
+  },
+
+  mktModeBadgeClass(status){
+    return status==='Live Data'?'bg':status==='Demo Data'?'by':status==='Data Unavailable'?'br':'bb';
+  },
+
+  renderMarket(d){
+    const badge=(txt,cls)=>`<span class="badge ${cls}">${this.esc(txt)}</span>`;
+    const riskCls=r=>r==='Low'?'bg':r==='High'?'br':'by';
+    const confCls=c=>c==='High'?'bg':c==='Low'?'br':'by';
+    const env=`<div class="card" style="margin-bottom:16px">
+      <div class="mkt-env">
+        ${badge(d.dataStatus,this.mktModeBadgeClass(d.dataStatus))}
+        ${badge('Provider: '+d.dataProvider,'bw')}
+        ${badge('Feed: '+d.feedType,'bw')}
+      </div>
+      <div class="mkt-meta">
+        <div class="mm"><div class="mm-l">Strategy</div><div class="mm-v">${this.esc(d.strategy)}</div></div>
+        <div class="mm"><div class="mm-l">Time Horizon</div><div class="mm-v">${this.esc(d.timeHorizon)}</div></div>
+        <div class="mm"><div class="mm-l">Risk</div><div class="mm-v">${this.esc(d.riskTolerance)}</div></div>
+        <div class="mm"><div class="mm-l">Data As Of</div><div class="mm-v">${this.esc((d.dataTimestamp||'').slice(0,16).replace('T',' '))}</div></div>
+      </div>
+      <p style="font-size:13px;color:var(--text2);line-height:1.6">${this.esc(d.marketContextSummary)}</p>
+      ${d.allocationConsiderations?`<div class="alert al-b" style="margin-top:12px">${this.esc(d.allocationConsiderations)}</div>`:''}
+      ${(d.limitations&&d.limitations.length)?`<div style="margin-top:12px"><div class="mm-l" style="margin-bottom:5px">Data Limitations</div><ul class="risk-list">${d.limitations.map(l=>`<li>${this.esc(l)}</li>`).join('')}</ul></div>`:''}
+    </div>`;
+
+    const metricRows=km=>(km||[]).map(x=>`<div class="km-row"><span class="km-l">${this.esc(x.label)}</span><span class="km-v">${this.esc(x.value)}${x.asOf?` <span class="km-s">(${this.esc(x.asOf)})</span>`:''}</span></div>`).join('');
+
+    const fundCard=f=>`<div class="rec">
+      <div class="rec-rnk"><span class="badge bb">${f.score}</span></div>
+      <div class="rec-sk" style="font-size:18px">${this.esc(f.ticker)}</div>
+      <div class="rec-sub">${this.esc(f.name)} · ${this.esc(f.category||'Fund')}</div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">${badge(f.riskLevel+' risk',riskCls(f.riskLevel))}${badge(f.confidence+' confidence',confCls(f.confidence))}${badge('Data: '+f.dataCompleteness,'bw')}</div>
+      <p style="font-size:12px;color:var(--text2);line-height:1.6">${this.esc(f.reasoning)}</p>
+      ${f.whyNow?`<p style="font-size:12px;color:var(--text2);line-height:1.6;margin-top:6px"><strong>Why now:</strong> ${this.esc(f.whyNow)}</p>`:''}
+      ${(f.keyRisks&&f.keyRisks.length)?`<ul class="risk-list">${f.keyRisks.map(r=>`<li>${this.esc(r)}</li>`).join('')}</ul>`:''}
+      ${f.portfolioOverlap?`<p style="font-size:11px;color:var(--muted);margin-top:8px">${this.esc(f.portfolioOverlap)}</p>`:''}
+      <div class="km">${metricRows(f.keyMetrics)}</div>
+      <div class="rec-acts"><button class="btn btn-g btn-sm" onclick="App.mktAddWatch('${this.esc(f.ticker)}','${this.esc(f.name)}','${this.esc(f.category||'Fund')}')">+ Watchlist</button></div>
+    </div>`;
+
+    const stockCard=s=>`<div class="rec">
+      <div class="rec-rnk"><span class="badge bb">${s.score}</span></div>
+      <div class="rec-sk" style="font-size:18px">${this.esc(s.ticker)}</div>
+      <div class="rec-sub">${this.esc(s.name)} · ${this.esc(s.industry||'')}</div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">${badge(s.riskLevel+' risk',riskCls(s.riskLevel))}${badge(s.confidence+' confidence',confCls(s.confidence))}${badge('Data: '+s.dataCompleteness,'bw')}</div>
+      <p style="font-size:12px;color:var(--text2);line-height:1.6">${this.esc(s.reasoning)}</p>
+      ${s.whyNow?`<p style="font-size:12px;color:var(--text2);line-height:1.6;margin-top:6px"><strong>Why now:</strong> ${this.esc(s.whyNow)}</p>`:''}
+      ${s.distanceFrom200WeekEma?`<p style="font-size:11px;color:var(--green);margin-top:8px">200-wk EMA: ${this.esc(s.distanceFrom200WeekEma)}</p>`:''}
+      ${(s.keyRisks&&s.keyRisks.length)?`<ul class="risk-list">${s.keyRisks.map(r=>`<li>${this.esc(r)}</li>`).join('')}</ul>`:''}
+      ${s.portfolioOverlap?`<p style="font-size:11px;color:var(--muted);margin-top:8px">${this.esc(s.portfolioOverlap)}</p>`:''}
+      <div class="km">${metricRows(s.keyMetrics)}</div>
+      <div class="rec-acts">
+        <button class="btn btn-g btn-sm" onclick="App.mktAddWatch('${this.esc(s.ticker)}','${this.esc(s.name)}','${this.esc(s.industry||'')}')">+ Watchlist</button>
+        <button class="btn btn-g btn-sm" onclick="App.mktToScreener('${this.esc(s.ticker)}')">Screener</button>
+        <button class="btn btn-g btn-sm" onclick="App.go('research',{ticker:'${this.esc(s.ticker)}'})">Research</button>
+        <button class="btn btn-g btn-sm" onclick="App.go('leaps',{ticker:'${this.esc(s.ticker)}'})">LEAPS</button>
+      </div>
+    </div>`;
+
+    const funds=(d.funds&&d.funds.length)?`<div class="ct" style="margin:6px 0 10px">Diversified Funds</div><div class="rec-grid">${d.funds.map(fundCard).join('')}</div>`:'';
+    const stocks=(d.stocks&&d.stocks.length)?`<div class="ct" style="margin:14px 0 10px">Individual Stocks</div><div class="rec-grid">${d.stocks.map(stockCard).join('')}</div>`:'';
+    const empty=(!d.funds||!d.funds.length)&&(!d.stocks||!d.stocks.length)?`<div class="empty"><div class="empty-ic">◇</div><h3>No candidates passed the filters</h3><p>Try widening industries or switching investment type.</p></div>`:'';
+
+    return env+funds+stocks+empty+`<p style="font-size:11px;color:var(--muted);margin-top:14px">${this.esc(d.disclaimer)}</p>`;
+  },
+
+  mktAddWatch(tk,nm,ind){
+    if(this.s.wl.find(x=>x.tk===tk)){this.flash('err',tk+' is already in your watchlist.');return}
+    this.s.wl.push({id:Date.now(),tk,nm,ind:ind||'',conf:3,note:'Added from Market Recommendations',added:new Date().toLocaleDateString()});
+    this.save();this.flash('ok',tk+' added to your watchlist.');
+  },
+
+  mktToScreener(tk){
+    this.go('screener');
+    setTimeout(()=>{if(typeof COMPANIES!=='undefined'&&COMPANIES[tk])this.loadMock(tk);else{const el=document.getElementById('sc-tk');if(el)el.value=tk;}},80);
   },
 
   // ============================================================

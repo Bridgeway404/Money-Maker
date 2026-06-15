@@ -3,3 +3,10 @@ publish = "static-site"
 
 [build.environment]
 NETLIFY_NEXT_PLUGIN_SKIP = "true"
+
+# Serverless functions for the Market Recommendations feature.
+# The static site is still published from static-site/; server source lives
+# outside it so it is never exposed to the browser.
+[functions]
+directory = "netlify/functions"
+node_bundler = "esbuild"
