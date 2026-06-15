@@ -853,10 +853,10 @@ Respond in valid JSON only, no markdown fences:
         <option>$5,000 – $25,000</option><option>$25,000 – $100,000</option>
         <option>Over $100,000</option>
       </select></div>`}
-    else if(step===1){content=`
+    else if(step===1){const savedInds=this.s.obData.industries||[];content=`
       <div class="ct" style="font-size:18px;margin-bottom:6px">Which industries interest you most?</div>
       <p style="font-size:13px;color:var(--muted);margin-bottom:20px">Select all that apply. The app focuses on GDP-driving sectors.</p>
-      <div class="cb-group">${INDUSTRIES.map(ind=>`<label class="cb-item" data-val="${ind}"><input type="checkbox">${ind}</label>`).join('')}</div>`}
+      <div class="cb-group">${INDUSTRIES.map(ind=>`<div class="cb-item${savedInds.includes(ind)?' checked':''}" data-val="${ind}">${ind}</div>`).join('')}</div>`}
     else if(step===2){content=`
       <div class="ct" style="font-size:18px;margin-bottom:6px">What stocks are you already watching?</div>
       <p style="font-size:13px;color:var(--muted);margin-bottom:20px">Enter tickers separated by commas (optional).</p>
@@ -1268,9 +1268,12 @@ Respond in valid JSON only, no markdown fences:
   // EVENT BINDING
   // ============================================================
   bind(){
-    // Checkbox toggle for industry selection
     document.querySelectorAll('.cb-item').forEach(el=>{
-      el.addEventListener('click',function(){this.classList.toggle('checked')});
+      el.addEventListener('click',function(){
+        this.classList.toggle('checked');
+        const checked=[...document.querySelectorAll('.cb-item.checked')].map(x=>x.dataset.val);
+        App.s.obData.industries=checked;
+      });
     });
     // Scroll chat to bottom
     const cm=document.getElementById('chat-msgs');
