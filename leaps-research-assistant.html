@@ -1438,6 +1438,7 @@ Respond in valid JSON only, no markdown fences:
         else if(s===400)msg=serverMsg||'Invalid request parameters — check your selections.';
         else if(s===429)msg='Rate limit reached. Please wait a moment and try again.';
         else if(s===401||s===403)msg='Provider authentication error ('+s+'). Check API credentials in Netlify environment variables.';
+        else if(s===504)msg='Market analysis took too long. Please try again.';
         else if(s>=500)msg=serverMsg||'Server error ('+s+'). The service may be temporarily unavailable — try again in a moment.';
         else msg=serverMsg||'Request failed (HTTP '+s+').';
         throw new Error(msg);

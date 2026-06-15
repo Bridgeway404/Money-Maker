@@ -10,7 +10,7 @@
 import { DEMO_STOCKS, DEMO_FUNDS, DEMO_AS_OF } from './demo.mjs';
 import { synthWeeklyBars } from './scoring.mjs';
 
-const DEFAULT_TIMEOUT = 8000;
+const DEFAULT_TIMEOUT = 2500; // tight budget: handler controls per-stage limits
 
 export function selectProvider(env) {
   const choice = (env.MARKET_DATA_PROVIDER || 'demo').toLowerCase();
@@ -58,6 +58,36 @@ export class DemoProvider {
       expenseRatio: d.expenseRatio, aum: d.aum, staticAsOf: d.staticAsOf,
       feedType: 'Demo', provider: 'Demo', asOf: DEMO_AS_OF,
     };
+  }
+  async getBatch(tickers) {
+    const result = {};
+    for (const ticker of tickers) {
+      const s = DEMO_STOCKS[ticker];
+      if (s) {
+        result[ticker] = {
+          ticker, price: s.price, prevClose: s.prevClose, volume: s.volume, avgVolume: s.avgVolume,
+          marketCap: s.marketCap, weeklyCloses: synthWeeklyBars(s.price, s.emaTargetPct),
+          cashFlow: s.cashFlow, cashFlowTrend: s.cashFlowTrend,
+          earningsTrend: s.earningsTrend, revenueTrend: s.revenueTrend,
+          debt: s.debt, equity: s.equity,
+          expenseRatio: null, aum: null, staticAsOf: null,
+          feedType: 'Demo', provider: 'Demo', asOf: DEMO_AS_OF,
+        };
+        continue;
+      }
+      const f = DEMO_FUNDS[ticker];
+      if (f) {
+        result[ticker] = {
+          ticker, price: f.price, prevClose: f.prevClose, volume: f.volume, avgVolume: f.avgVolume,
+          expenseRatio: f.expenseRatio, aum: f.aum, staticAsOf: f.staticAsOf,
+          weeklyCloses: [], marketCap: null,
+          cashFlow: null, cashFlowTrend: null, earningsTrend: null, revenueTrend: null,
+          debt: null, equity: null,
+          feedType: 'Demo', provider: 'Demo', asOf: DEMO_AS_OF,
+        };
+      }
+    }
+    return result;
   }
 }
 
@@ -109,6 +139,19 @@ export class PolygonProvider {
     const base = await this._common(ticker);
     return { ...base, expenseRatio: null, aum: null, staticAsOf: null };
   }
+  async getBatch(tickers) {
+    const settled = await Promise.allSettled(tickers.map(t => this._common(t)));
+    const result = {};
+    tickers.forEach((t, i) => {
+      if (settled[i].status === 'fulfilled') {
+        result[t] = { ...settled[i].value,
+          marketCap: null, cashFlow: null, cashFlowTrend: null,
+          earningsTrend: null, revenueTrend: null, debt: null, equity: null,
+          expenseRatio: null, aum: null, staticAsOf: null };
+      }
+    });
+    return result;
+  }
 }
 
 // --------------------------- Alpaca --------------------------------------
@@ -150,6 +193,36 @@ export class AlpacaProvider {
   async getFund(ticker) {
     const base = await this._common(ticker);
     return { ...base, expenseRatio: null, aum: null, staticAsOf: null };
+  }
+  // One multi-symbol request for all tickers — avoids per-ticker round trips.
+  // Alpaca GET /v2/stocks/bars?symbols=A,B,C&timeframe=1Week&...
+  async getBatch(tickers) {
+    const symbols = tickers.join(',');
+    const start   = new Date(Date.now() - 220 * 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const url     = `https://data.alpaca.markets/v2/stocks/bars?symbols=${symbols}&timeframe=1Week&start=${start}&limit=300&feed=${this.feed}&adjustment=all&sort=asc`;
+    let data;
+    try { data = await this._json(url); } catch { return {}; }
+    const bars = data.bars || {};
+    const result = {};
+    for (const ticker of tickers) {
+      const tickerBars = bars[ticker] || [];
+      const closes     = tickerBars.map(b => b.c).filter(c => typeof c === 'number');
+      const last       = tickerBars.slice(-1)[0] || {};
+      const prev       = tickerBars.slice(-2)[0] || {};
+      result[ticker] = {
+        ticker,
+        price: last.c ?? null, prevClose: prev.c ?? null,
+        volume: last.v ?? null, avgVolume: avgOf(tickerBars.slice(-13).map(b => b.v)),
+        weeklyCloses: closes,
+        feedType: this.feedType, provider: this.name,
+        asOf: last.t || new Date().toISOString(),
+        // Fundamentals not in bars endpoint:
+        marketCap: null, cashFlow: null, cashFlowTrend: null,
+        earningsTrend: null, revenueTrend: null, debt: null, equity: null,
+        expenseRatio: null, aum: null, staticAsOf: null,
+      };
+    }
+    return result;
   }
 }
 
