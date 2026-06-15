@@ -16,11 +16,11 @@ const DISCLAIMER = 'Educational research only — not individualized financial a
 const CACHE = new Map();
 const cacheTtl = (env) => (+env.MARKET_DATA_CACHE_TTL_SECONDS || 60) * 1000;
 
-export default async function handler(req, context) {
-  if (req.method !== 'POST') return json(405, { error: 'Method not allowed. Use POST.' });
+export const handler = async (event, context) => {
+  if (event.httpMethod !== 'POST') return json(405, { error: 'Method not allowed. Use POST.' });
 
   let raw;
-  try { raw = await req.json(); } catch { return json(400, { error: 'Invalid JSON body.' }); }
+  try { raw = JSON.parse(event.body || '{}'); } catch { return json(400, { error: 'Invalid JSON body.' }); }
 
   const v = validateRequest(raw);
   if (!v.ok) return json(400, { error: v.error });
@@ -384,6 +384,6 @@ function shortDate(iso) { if (!iso) return ''; const s = String(iso); return s.l
 function cryptoId() { return 'req_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
 function safeLog(tag, e) { try { console.error(`[market-reco] ${tag}: ${e?.message || e}`); } catch {} }
 
-function json(status, obj) {
-  return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
+function json(statusCode, obj) {
+  return { statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) };
 }
