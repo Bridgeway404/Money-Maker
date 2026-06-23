@@ -1,2 +1,16 @@
 /.next
 /node_modules
+
+# Environment / secret files
+.env
+.env.local
+.env.development
+.env.production
+.env*.local
+
+# Deploy tooling
+.netlify
+.vercel
+
+# OS files
+.DS_Store
