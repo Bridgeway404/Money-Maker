@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import type { ResearchReport } from '@/types'
 import Card from '@/components/ui/Card'
-import { ScoreBadge } from '@/components/ui/Badge'
+import Badge, { ScoreBadge } from '@/components/ui/Badge'
 import { formatDate } from '@/lib/utils/formatting'
 import { ArrowRight, FileText } from 'lucide-react'
 
@@ -21,7 +21,11 @@ export default function ReportCard({ report }: ReportCardProps) {
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-mono font-bold text-zinc-100 text-sm">{report.ticker}</span>
               <span className="text-zinc-400 text-sm">{report.company_name}</span>
-              <ScoreBadge score={report.score} />
+              {report.score > 0 ? (
+                <ScoreBadge score={report.score} />
+              ) : (
+                <Badge variant="outline">Unscored</Badge>
+              )}
             </div>
             <div className="flex items-center gap-2 mt-1">
               <span className="text-xs text-zinc-500">{report.industry}</span>

@@ -10,6 +10,7 @@ import Card from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
 import Select from '@/components/ui/Select'
 import { DEFAULT_WEIGHTS } from '@/lib/scoring'
+import { buildOnboardingUpsert } from '@/lib/settings/onboarding'
 import type { ScoringWeights, PurchasingPower, RiskAppetite, Priority, Industry } from '@/types'
 
 const INDUSTRIES: { value: string; label: string }[] = [
@@ -79,8 +80,10 @@ export default function SettingsPage() {
   const [riskAppetite, setRiskAppetite] = useState<RiskAppetite>('Moderate')
   const [priority, setPriority] = useState<Priority>('Company Quality')
   const [selectedIndustries, setSelectedIndustries] = useState<Industry[]>(['Technology', 'Semiconductors'])
+  const [watchingStocks, setWatchingStocks] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -103,34 +106,55 @@ export default function SettingsPage() {
       setRiskAppetite(onboarding.risk_appetite as RiskAppetite)
       setPriority(onboarding.priority as Priority)
       setSelectedIndustries(onboarding.industries as Industry[])
+      // Keep the onboarding watchlist so saving Settings never erases it.
+      setWatchingStocks(
+        Array.isArray(onboarding.watching_stocks) ? onboarding.watching_stocks : []
+      )
     }
     setLoading(false)
   }
 
   async function handleSave() {
+    setSaveError(null)
+
+    const total = Object.values(weights).reduce((a, b) => a + b, 0)
+    if (total !== 100) {
+      setSaveError(`Scoring weights must total exactly 100 (currently ${total}). Adjust the sliders before saving.`)
+      return
+    }
+
     setSaving(true)
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    if (!user) {
+      setSaving(false)
+      return
+    }
 
-    await Promise.all([
+    const onboardingRow = buildOnboardingUpsert(
+      user.id,
+      { watching_stocks: watchingStocks },
+      {
+        purchasing_power: purchasingPower,
+        industries: selectedIndustries,
+        risk_appetite: riskAppetite,
+        priority,
+      }
+    )
+
+    const [configResult, onboardingResult] = await Promise.all([
       supabase
         .from('scoring_config')
         .upsert({ user_id: user.id, weights })
         .eq('user_id', user.id),
-      supabase
-        .from('onboarding_answers')
-        .upsert({
-          user_id: user.id,
-          purchasing_power: purchasingPower,
-          risk_appetite: riskAppetite,
-          priority,
-          industries: selectedIndustries,
-          watching_stocks: [],
-        }),
+      supabase.from('onboarding_answers').upsert(onboardingRow),
     ])
 
     setSaving(false)
+    if (configResult.error || onboardingResult.error) {
+      setSaveError('Failed to save settings. Please try again.')
+      return
+    }
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
@@ -241,7 +265,7 @@ export default function SettingsPage() {
             </div>
             {totalWeight !== 100 && (
               <div className="mb-4 p-2 rounded-lg bg-yellow-400/5 border border-yellow-400/20 text-xs text-yellow-300">
-                Weights should total 100 for accurate scoring.
+                Weights must total exactly 100 — saving is blocked until they do.
               </div>
             )}
             <div className="space-y-5">
@@ -278,7 +302,10 @@ export default function SettingsPage() {
       )}
 
       {/* Save button */}
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end gap-2">
+        {saveError && (
+          <p className="text-sm text-rose-400">{saveError}</p>
+        )}
         <Button onClick={handleSave} loading={saving} size="lg">
           {saved ? (
             <span className="text-emerald-300">Saved!</span>

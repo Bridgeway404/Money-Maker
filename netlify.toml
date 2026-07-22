@@ -1,12 +1,20 @@
+# Decommissioned Netlify configuration.
+#
+# This repository previously deployed a static single-file prototype from
+# static-site/ plus a serverless function from netlify/functions/. Both were
+# archived under archive/ in Phase 1 (see archive/README.md).
+#
+# This file intentionally publishes only deploy-placeholder/ — a static notice
+# page — so that any Netlify site still connected to this repository stops
+# serving the retired prototype and cannot expose the archived code. No
+# functions are declared.
+#
+# The canonical application is the Next.js + Supabase app at the repository
+# root; deploy it to Vercel (or any Node.js host) per README.md.
+
 [build]
-publish = "static-site"
+publish = "deploy-placeholder"
+command = ""
 
 [build.environment]
 NETLIFY_NEXT_PLUGIN_SKIP = "true"
-
-# Serverless functions for the Market Recommendations feature.
-# The static site is still published from static-site/; server source lives
-# outside it so it is never exposed to the browser.
-[functions]
-directory = "netlify/functions"
-node_bundler = "esbuild"

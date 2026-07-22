@@ -1,10 +1,22 @@
 # LEAPS Research Assistant
 
-An AI-powered stock and options research tool for experienced investors. Identifies industry leaders primed for LEAPS call option investments using Claude AI.
+An educational stock and LEAPS-options research prototype built with **Next.js +
+Supabase**, with AI narrative generated server-side via the Anthropic API.
+
+> **Canonical application:** the Next.js app in `src/` at the repository root is
+> the one and only LEAPS application. The earlier standalone HTML prototype and
+> its Netlify function were retired in Phase 1 and preserved under
+> [`archive/`](archive/README.md) — they must not be deployed or used.
+
+> **Data status (Phase 1):** this prototype has **no market-data, fundamentals,
+> news, or options-data providers**. Company examples are labeled sample data,
+> all option contracts are labeled mock data, screener inputs are user-entered,
+> and AI report text is unverified narrative. Nothing in this app is a live
+> quote or a trade recommendation. Real data providers are planned for Phase 2.
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 18+ (CI runs on Node 20)
 - A Supabase account and project
 - An Anthropic API key
 
@@ -22,105 +34,107 @@ Copy `.env.example` to `.env.local` and fill in your values:
 cp .env.example .env.local
 ```
 
-Required variables:
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Your Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase anon/public key (safe for the browser; RLS enforces access) |
+| `ANTHROPIC_API_KEY` | Yes | Anthropic API key — **server-side only**, never sent to the browser |
+| `ANTHROPIC_MODEL` | No | Claude model id override (default `claude-sonnet-4-6`; validated in `src/lib/ai/model.ts`) |
 
-| Variable | Description |
-|----------|-------------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon/public key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (server-side only) |
-| `ANTHROPIC_API_KEY` | Anthropic API key for Claude AI |
+No other environment variables are used. (`SUPABASE_SERVICE_ROLE_KEY` was
+declared in earlier versions but never used by any code and has been removed.)
 
 ## Supabase Setup
 
-1. Create a new Supabase project at [supabase.com](https://supabase.com)
-2. Go to **SQL Editor** in your Supabase dashboard
-3. Paste and run the contents of `supabase/schema.sql`
-4. This creates all tables, RLS policies, triggers, and seeds mock option contract data
+1. Create a Supabase project at [supabase.com](https://supabase.com)
+2. In **SQL Editor**, run the contents of `supabase/schema.sql`
+3. This creates all tables, row-level-security policies, triggers, and seeds
+   the clearly-labeled mock option-contract data
 
-## Running Locally
+## Development
 
 ```bash
-npm run dev
+npm run dev        # start the dev server on http://localhost:3000
+npm run typecheck  # TypeScript, no emit
+npm run lint       # ESLint (next/core-web-vitals)
+npm run test       # Vitest unit tests
+npm run build      # production build
+npm run verify     # typecheck + lint + test + build (what CI runs)
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+CI (`.github/workflows/ci.yml`) runs `verify` on pull requests and on pushes to
+the default branch.
 
-## Deploying to Vercel
+## Deployment
 
-1. Push to a GitHub repository
-2. Import the project in [Vercel](https://vercel.com)
-3. Add all environment variables in the Vercel project settings
-4. Deploy
+Deploy the Next.js app to **Vercel** (or any Node.js host):
 
-## App Architecture
+1. Import the repository in [Vercel](https://vercel.com)
+2. Set the environment variables above in the project settings
+3. Deploy
 
-### Pages
+**Netlify note:** the root `netlify.toml` is intentionally a decommission
+configuration. It publishes only `deploy-placeholder/` (a static retirement
+notice) so that any Netlify site still connected to this repository stops
+serving the archived static prototype. Do not point Netlify at the archive.
+
+## Application Structure
 
 | Route | Description |
 |-------|-------------|
 | `/` | Landing page |
-| `/login` | Email/password sign in |
-| `/signup` | Account creation |
+| `/login`, `/signup` | Supabase email/password auth |
 | `/onboarding` | 5-step profile setup |
-| `/dashboard` | Overview with weekly opportunities |
-| `/screener` | Score a company for LEAPS suitability |
-| `/research/[ticker]` | AI research report for a stock |
-| `/leaps/[ticker]` | 3 ranked LEAPS recommendations |
-| `/watchlist` | Manage stocks you are tracking |
-| `/portfolio` | Track current stock holdings |
-| `/settings` | Adjust scoring weights and profile |
+| `/dashboard` | Overview (highlights are labeled sample data) |
+| `/screener` | Deterministic 0–100 LEAPS-suitability score from user-entered metrics |
+| `/research/[ticker]` | AI background briefing (labeled unverified prototype narrative) |
+| `/leaps/[ticker]` | AI ranking of the labeled mock option contracts |
+| `/watchlist`, `/portfolio` | Manual tracking (no live valuations) |
+| `/settings` | Scoring weights (must total 100) and profile preferences |
 
-### API Routes
+| API route | Method | Notes |
+|-----------|--------|-------|
+| `/api/score` | POST | Deterministic score; validates metrics and weights; auth required |
+| `/api/research` | POST | AI narrative; score is deterministic or omitted — never AI-invented; no news section |
+| `/api/leaps` | POST | Requires a stored screener analysis (409 `analysis_required` otherwise); AI ranking is schema-validated and bounds-checked |
+| `/api/chat` | POST | Grounded persona; input length limits enforced |
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/research` | POST | Generate AI research report |
-| `/api/score` | POST | Calculate 1-100 LEAPS suitability score |
-| `/api/leaps` | POST | Generate 3 ranked LEAPS recommendations |
-| `/api/chat` | POST | Follow-up Q&A with context |
+All four API routes check Supabase authentication **inside the route** — the
+middleware redirect is a convenience, not the security boundary.
 
-### Scoring System (100 points total)
+### Scoring
 
-| Factor | Default Weight | Notes |
-|--------|---------------|-------|
-| Industry Leadership | 25 | Top 2-3 by market cap required |
-| Cash Flow | 20 | Strong FCF = full points; Negative = disqualified |
-| Earnings Quality | 20 | Growing EPS = full; Declining = disqualified |
-| Debt-to-Equity | 10 | Low D/E preferred |
-| 200-Week EMA Distance | 15 | Within 10% = ideal entry |
-| Option Affordability | 5 | Based on purchasing power |
-| Option Expiration | 5 | 12+ months preferred |
+Scoring is 100% deterministic (`src/lib/scoring/index.ts`): weights over
+industry leadership (25), cash flow (20), earnings quality (20), debt-to-equity
+(10), 200-week-EMA distance (15), option affordability (5), and option
+expiration (5). Negative cash flow, declining earnings, or a non-top-3 industry
+rank disqualify (score 0). Custom weights must total exactly 100 and are
+validated server-side. The AI never produces or overrides a score.
 
-**Score interpretation:**
-- 90–100: Strong Buy
-- 80–89: Buy
-- 60–79: Watch
-- 40–59: Weak
-- 0–39: Avoid
+## Repository Layout
 
-**Automatic disqualifiers (score = 0):**
-- Negative cash flow
-- Declining earnings
-- Not in top 3 by market cap
+```
+src/                 Canonical Next.js application
+  app/               Pages + API routes
+  lib/scoring/       Deterministic scoring + EMA math
+  lib/validation/    Request validation for all API routes
+  lib/ai/            Anthropic client, model config, prompts, AI-response validation
+supabase/schema.sql  Database schema, RLS, mock-contract seed data
+archive/             Retired static prototype + Netlify function (NOT deployed)
+deploy-placeholder/  Static notice page published by the decommission netlify.toml
+```
 
-### LEAPS Selection Criteria
+## Roadmap
 
-1. Calls only, 12+ months expiration (longer is better)
-2. Options depreciated ~40% from all-time high premium (on sale)
-3. Strike price near ATM (delta 0.40–0.60 preferred)
-4. Strong volume and open interest for liquidity
-5. Not excessive IV (avoid overpriced premiums)
-
-## V2 Roadmap
-
-- Real-time options pricing via market data API
-- Brokerage connection (read-only portfolio import)
-- Weekly email digest of top opportunities
-- Alert system for EMA crossovers
-- Multi-leg strategy analysis
-- Comparative analysis across same-industry peers
+- **Phase 2** — real market-data + fundamentals providers (porting the provider
+  abstraction preserved in `archive/netlify-market-recommendations/`), then a
+  real options-chain provider to replace the mock contracts
+- **Phase 3+** — grounded research reports, personalization, risk controls
 
 ## Disclaimer
 
-This tool is for educational and research purposes only. All content, scores, and recommendations do not constitute financial advice. Options trading involves substantial risk of loss. Past performance does not guarantee future results. Always consult a licensed financial advisor before making investment decisions.
+This tool is for educational and research purposes only. All content, scores,
+and AI narrative are prototype output and do not constitute financial advice.
+Options trading involves substantial risk of loss. Past performance does not
+guarantee future results. Always consult a licensed financial advisor before
+making investment decisions.

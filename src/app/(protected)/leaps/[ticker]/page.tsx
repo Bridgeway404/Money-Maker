@@ -3,7 +3,8 @@
 export const dynamic = 'force-dynamic'
 
 import { useState, useEffect, use } from 'react'
-import { TrendingUp, RefreshCw, Crown, Shield } from 'lucide-react'
+import Link from 'next/link'
+import { TrendingUp, RefreshCw, Crown, Shield, Search } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { MOCK_COMPANIES, MOCK_OPTION_CONTRACTS } from '@/lib/utils/mock-data'
 import Header from '@/components/layout/Header'
@@ -30,6 +31,7 @@ export default function LeapsTickerPage({ params }: PageProps) {
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [analysisRequired, setAnalysisRequired] = useState(false)
 
   const mockCompany = MOCK_COMPANIES.find((c) => c.ticker === upperTicker)
   const mockContracts = MOCK_OPTION_CONTRACTS[upperTicker] ?? []
@@ -62,33 +64,42 @@ export default function LeapsTickerPage({ params }: PageProps) {
 
     setGenerating(true)
     setError(null)
+    setAnalysisRequired(false)
 
     const company = mockCompany ?? { ticker: upperTicker, company_name: upperTicker }
 
     try {
-      // First get the score if available
-      const { data: analysis } = await supabase
-        .from('stock_analyses')
-        .select('score')
-        .eq('ticker', upperTicker)
-        .order('analyzed_at', { ascending: false })
-        .limit(1)
-        .single()
-
-      const stockScore = (analysis?.score as { total?: number })?.total ?? (mockCompany ? 88 : 75)
-
+      // The server derives the stock-quality score from the user's stored
+      // screener analysis. No score is sent from the client, and there is no
+      // fabricated fallback — if no analysis exists, the API says so.
       const res = await fetch('/api/leaps', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ticker: upperTicker,
           company_name: company.company_name,
-          stock_score: stockScore,
           contracts: mockContracts,
         }),
       })
 
-      if (!res.ok) throw new Error('Failed to generate')
+      if (!res.ok) {
+        let body: { error?: string; message?: string } = {}
+        try {
+          body = await res.json()
+        } catch {
+          // fall through to the generic error below
+        }
+        if (body.error === 'analysis_required') {
+          setAnalysisRequired(true)
+          setError(
+            body.message ??
+              `Score ${upperTicker} in the screener first — recommendations require a stored analysis.`
+          )
+          return
+        }
+        setError(body.message ?? 'Failed to generate LEAPS recommendations. Please try again.')
+        return
+      }
       const data = await res.json()
       setRecommendation(data)
     } catch {
@@ -206,9 +217,18 @@ export default function LeapsTickerPage({ params }: PageProps) {
           {error && (
             <p className="text-sm text-rose-400 mb-4">{error}</p>
           )}
-          <Button onClick={generateRecommendations} size="lg" disabled={mockContracts.length === 0}>
-            <TrendingUp className="h-4 w-4" /> Generate LEAPS Recommendations
-          </Button>
+          <div className="flex items-center justify-center gap-3">
+            <Button onClick={generateRecommendations} size="lg" disabled={mockContracts.length === 0}>
+              <TrendingUp className="h-4 w-4" /> Generate LEAPS Recommendations
+            </Button>
+            {analysisRequired && (
+              <Link href="/screener">
+                <Button variant="secondary" size="lg">
+                  <Search className="h-4 w-4" /> Run Screener Analysis
+                </Button>
+              </Link>
+            )}
+          </div>
         </Card>
       ) : generating ? (
         <div className="flex flex-col items-center justify-center py-24">
