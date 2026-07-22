@@ -3,8 +3,11 @@ name: CI
 on:
   push:
     branches:
-      - claude/leaps-research-assistant-mvp-t7voo2 # current default branch
-      - claude/leaps-status-report-0ejjsk # Phase 1 branch
+      # `main` is listed ahead of the rename so push CI keeps working the moment
+      # the default branch is renamed. The current Claude-named default is kept
+      # until the GitHub rename actually happens; remove it in the Phase 1.5 PR.
+      - main
+      - claude/leaps-research-assistant-mvp-t7voo2 # current default branch (pre-rename)
   pull_request:
 
 jobs:
