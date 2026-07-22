@@ -208,10 +208,11 @@ export interface ScoreRequest {
   weights?: ScoringWeights
 }
 
+// stock_score is intentionally absent: the server derives it from the user's
+// stored screener analysis and rejects requests when none exists.
 export interface LeapsRequest {
   ticker: string
   company_name: string
-  stock_score: number
   contracts: OptionContract[]
 }
 

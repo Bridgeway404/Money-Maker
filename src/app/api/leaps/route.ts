@@ -1,26 +1,70 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { anthropic, MODEL_ID } from '@/lib/ai/client'
 import { buildLeapsPrompt } from '@/lib/ai/prompts'
+import {
+  safeParseJson,
+  validateLeapsAiResponse,
+} from '@/lib/ai/leaps-response'
 import { createClient } from '@/lib/supabase/server'
-import type { LeapsRequest, RecommendedContract } from '@/types'
+import {
+  MAX_BODY_BYTES,
+  resolveStockScore,
+  validateLeapsRequest,
+} from '@/lib/validation'
+import type { RecommendedContract } from '@/types'
+
+const DISCLAIMER =
+  'This is for educational and research purposes only. Past performance does not guarantee future results. This is not financial advice. Options trading involves substantial risk of loss.'
 
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
-
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const body: LeapsRequest = await request.json()
-    const { ticker, company_name, stock_score, contracts } = body
-
-    if (!ticker || !contracts || contracts.length === 0) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
+    const rawText = await request.text()
+    if (rawText.length > MAX_BODY_BYTES) {
+      return NextResponse.json({ error: 'Request body too large.' }, { status: 413 })
+    }
+    let raw: unknown
+    try {
+      raw = JSON.parse(rawText)
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 })
     }
 
-    const prompt = buildLeapsPrompt(ticker.toUpperCase(), company_name, stock_score, contracts)
+    const parsed = validateLeapsRequest(raw)
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 })
+    }
+    const { ticker, company_name, contracts } = parsed.value
+
+    // The stock-quality score must come from a real stored screener analysis
+    // belonging to this user. The route never accepts a client-supplied score
+    // and never fabricates a fallback.
+    const { data: analysis } = await supabase
+      .from('stock_analyses')
+      .select('score')
+      .eq('user_id', user.id)
+      .eq('ticker', ticker)
+      .order('analyzed_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const stockScore = resolveStockScore(analysis)
+    if (stockScore === null) {
+      return NextResponse.json(
+        {
+          error: 'analysis_required',
+          message: `No screener analysis found for ${ticker}. Score the company in the screener first — LEAPS ranking requires a real stored analysis.`,
+        },
+        { status: 409 }
+      )
+    }
+
+    const prompt = buildLeapsPrompt(ticker, company_name, stockScore, contracts)
 
     const message = await anthropic.messages.create({
       model: MODEL_ID,
@@ -29,48 +73,50 @@ export async function POST(request: NextRequest) {
     })
 
     const content = message.content[0]
-    if (content.type !== 'text') {
-      return NextResponse.json({ error: 'Invalid AI response' }, { status: 500 })
+    if (!content || content.type !== 'text') {
+      return NextResponse.json(
+        { error: 'ai_response_invalid', message: 'The AI returned no text content.' },
+        { status: 502 }
+      )
     }
 
-    let parsed: { recommendations: Array<{
-      rank: number
-      is_front_runner: boolean
-      contract_index: number
-      ai_reasoning: string
-      risk_level: string
-      affordability: string
-      score: number
-    }>, front_runner_explanation: string }
-
-    try {
-      const text = content.text.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim()
-      parsed = JSON.parse(text)
-    } catch {
-      return NextResponse.json({ error: 'Failed to parse AI response' }, { status: 500 })
+    const aiJson = safeParseJson(content.text)
+    const validated = validateLeapsAiResponse(aiJson, contracts.length)
+    if (!validated.ok) {
+      // Detailed validation errors are logged server-side only. The client
+      // receives a generic message — no validation structure, model output,
+      // prompt content, or provider detail is exposed to the browser.
+      console.error('LEAPS AI response rejected:', validated.errors)
+      return NextResponse.json(
+        {
+          error: 'ai_response_invalid',
+          message: 'The AI ranking failed validation. Please try again.',
+        },
+        { status: 502 }
+      )
     }
 
-    // Map AI output to our contract objects
-    const recommendations: RecommendedContract[] = parsed.recommendations.map((rec) => ({
-      rank: rec.rank as 1 | 2 | 3,
-      is_front_runner: rec.is_front_runner,
-      contract: contracts[rec.contract_index - 1],
-      ai_reasoning: rec.ai_reasoning,
-      risk_level: rec.risk_level as 'Low' | 'Medium' | 'High',
-      affordability: rec.affordability as 'Affordable' | 'Moderate' | 'Expensive',
-      score: rec.score,
-    }))
-
-    const DISCLAIMER =
-      'This is for educational and research purposes only. Past performance does not guarantee future results. This is not financial advice. Options trading involves substantial risk of loss.'
+    // contract_index values are guaranteed in-range and unique by the
+    // validator, so this mapping cannot produce undefined contracts.
+    const recommendations: RecommendedContract[] = validated.value.recommendations.map(
+      (rec) => ({
+        rank: rec.rank as 1 | 2 | 3,
+        is_front_runner: rec.is_front_runner,
+        contract: contracts[rec.contract_index - 1],
+        ai_reasoning: rec.ai_reasoning,
+        risk_level: rec.risk_level,
+        affordability: rec.affordability,
+        score: rec.score,
+      })
+    )
 
     const leapsData = {
       user_id: user.id,
-      ticker: ticker.toUpperCase(),
+      ticker,
       company_name,
-      stock_score,
+      stock_score: stockScore,
       recommendations,
-      front_runner_explanation: parsed.front_runner_explanation,
+      front_runner_explanation: validated.value.front_runner_explanation,
       disclaimer: DISCLAIMER,
     }
 
@@ -82,7 +128,11 @@ export async function POST(request: NextRequest) {
 
     if (error) {
       console.error('Supabase insert error:', error)
-      return NextResponse.json({ ...leapsData, id: 'temp', generated_at: new Date().toISOString() })
+      return NextResponse.json({
+        ...leapsData,
+        id: 'temp',
+        generated_at: new Date().toISOString(),
+      })
     }
 
     return NextResponse.json(saved)
