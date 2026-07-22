@@ -65,6 +65,12 @@ npm run verify     # typecheck + lint + test + build (what CI runs)
 CI (`.github/workflows/ci.yml`) runs `verify` on pull requests and on pushes to
 the default branch.
 
+> **Default branch:** the default branch is being renamed to `main`. The push
+> CI trigger already lists `main`; the interim Claude-named branch
+> (`claude/leaps-research-assistant-mvp-t7voo2`) stays in the trigger only until
+> the GitHub rename occurs and will be removed in the Phase 1.5 PR. Treat `main`
+> as the canonical branch going forward.
+
 ## Deployment
 
 Deploy the Next.js app to **Vercel** (or any Node.js host):
