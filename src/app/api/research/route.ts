@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { anthropic, MODEL_ID } from '@/lib/ai/client'
 import { buildResearchPrompt, DISCLAIMER } from '@/lib/ai/prompts'
 import { safeParseJson } from '@/lib/ai/leaps-response'
+import { validateResearchAiResponse } from '@/lib/ai/research-response'
 import { calculateScore, calculateEmaDistance } from '@/lib/scoring'
 import { createClient } from '@/lib/supabase/server'
 import {
@@ -9,12 +10,6 @@ import {
   hasCompleteMetrics,
   validateResearchRequest,
 } from '@/lib/validation'
-
-const MAX_SECTION_CHARS = 8_000
-
-function section(v: unknown): string {
-  return typeof v === 'string' ? v.trim().slice(0, MAX_SECTION_CHARS) : ''
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -57,19 +52,27 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Strict validation of the AI narrative. Missing/empty essential
+    // sections, wrong types, and any model-supplied score/news/market-claim
+    // field are all rejected here — no malformed report is coerced into an
+    // apparently-successful blank one, and nothing invalid is persisted.
     const aiJson = safeParseJson(content.text)
-    if (aiJson === null || typeof aiJson !== 'object' || Array.isArray(aiJson)) {
+    const validated = validateResearchAiResponse(aiJson)
+    if (!validated.ok) {
+      // Detailed errors are logged server-side only; the client gets a
+      // generic message with no validation structure or model output.
+      console.error('Research AI response rejected:', validated.errors)
       return NextResponse.json(
-        { error: 'ai_response_invalid', message: 'The AI response could not be parsed.' },
+        { error: 'ai_response_invalid', message: 'The AI report failed validation. Please try again.' },
         { status: 502 }
       )
     }
-    const ai = aiJson as Record<string, unknown>
+    const narrative = validated.value
 
-    // The score is NEVER taken from the AI. When the caller supplied the full
-    // metric set, it is computed deterministically (same engine as the
-    // screener). Otherwise the report is stored unscored (0) and the UI shows
-    // "Unscored" instead of a rating.
+    // The score is NEVER taken from the AI (the validator rejects any
+    // model-supplied score field). When the caller supplied the full metric
+    // set, it is computed deterministically (same engine as the screener).
+    // Otherwise the report is stored unscored (0) and the UI shows "Unscored".
     let score = 0
     let score_source: 'deterministic' | 'unscored' = 'unscored'
     if (hasCompleteMetrics(metrics)) {
@@ -92,20 +95,21 @@ export async function POST(request: NextRequest) {
       company_name,
       industry,
       score,
-      overview: section(ai.overview),
-      industry_position: section(ai.industry_position),
-      cash_flow_analysis: section(ai.cash_flow_analysis),
-      earnings_analysis: section(ai.earnings_analysis),
-      debt_analysis: section(ai.debt_analysis),
-      technical_analysis: section(ai.technical_analysis),
-      // No news provider exists; the prompt no longer requests news and the
-      // column is stored empty so stale AI "news" can't read as fact.
+      overview: narrative.overview,
+      industry_position: narrative.industry_position,
+      cash_flow_analysis: narrative.cash_flow_analysis,
+      earnings_analysis: narrative.earnings_analysis,
+      debt_analysis: narrative.debt_analysis,
+      technical_analysis: narrative.technical_analysis,
+      // Server-controlled: no news provider exists, so this stays empty
+      // regardless of anything the model returns (the validator also rejects
+      // model-supplied news fields outright).
       news_summary: '',
-      bull_case: section(ai.bull_case),
-      bear_case: section(ai.bear_case),
-      risks: section(ai.risks),
-      conclusion: section(ai.conclusion),
-      disclaimer: section(ai.disclaimer) || DISCLAIMER,
+      bull_case: narrative.bull_case,
+      bear_case: narrative.bear_case,
+      risks: narrative.risks,
+      conclusion: narrative.conclusion,
+      disclaimer: narrative.disclaimer || DISCLAIMER,
     }
 
     const { data: report, error } = await supabase

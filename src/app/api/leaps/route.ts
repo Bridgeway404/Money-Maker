@@ -83,12 +83,14 @@ export async function POST(request: NextRequest) {
     const aiJson = safeParseJson(content.text)
     const validated = validateLeapsAiResponse(aiJson, contracts.length)
     if (!validated.ok) {
+      // Detailed validation errors are logged server-side only. The client
+      // receives a generic message — no validation structure, model output,
+      // prompt content, or provider detail is exposed to the browser.
       console.error('LEAPS AI response rejected:', validated.errors)
       return NextResponse.json(
         {
           error: 'ai_response_invalid',
           message: 'The AI ranking failed validation. Please try again.',
-          details: validated.errors,
         },
         { status: 502 }
       )
