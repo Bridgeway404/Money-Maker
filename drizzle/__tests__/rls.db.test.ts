@@ -13,6 +13,20 @@ import ws from 'ws'
 // All fixture identities are synthetic: *.example.invalid emails and fake
 // JWT subjects. No real member data is ever created.
 //
+// ROLE SIMULATION (test-only): `SET ROLE x` requires the session role to be
+// a member of x (with the SET option since PostgreSQL 16). The migration
+// CREATEs `authenticated`/`anonymous`, and PostgreSQL leaves the creating
+// role with ADMIN OPTION on roles it creates — but not necessarily with a
+// SET-capable membership, which is exactly what run 30032400037 hit
+// ("permission denied to set role"). The setup below probes SET ROLE and,
+// only when (a) it fails and (b) the environment attests
+// NEON_TARGET_BRANCH=development + NEON_TARGET_IS_PRODUCTION=false, grants
+// the session role a test-scoped membership, tracked and revoked in
+// afterAll. This changes nothing in the production authorization model:
+// the grant lives only on the disposable development branch for the
+// duration of the suite, and the suite refuses to touch role membership
+// anywhere else. No role ever receives BYPASSRLS.
+//
 // SCOPE OF PROOF — what this suite does and does not validate:
 //  * VALIDATED NOW (Postgres role/claim simulation): the suite assumes the
 //    Postgres session role (`authenticated` / `anonymous`) and injects JWT
@@ -33,10 +47,17 @@ const SUB_B = 'rls-test-sub-member'
 const EMAIL_A = 'rls-test-admin@example.invalid'
 const EMAIL_B = 'rls-test-member@example.invalid'
 
+const TEST_ROLES = ['authenticated', 'anonymous'] as const
+type TestRole = (typeof TEST_ROLES)[number]
+
 const T = 30_000
+
+const quoteIdent = (name: string) => `"${name.replace(/"/g, '""')}"`
 
 describe.skipIf(!url)('RLS isolation (live database)', () => {
   let pool: Pool
+  let sessionRole: string // the Neon connection role (never printed with secrets — it is only a role name)
+  const grantedByTest: TestRole[] = []
   let memberA: string // active admin
   let memberB: string // active regular member
   let privateChannelA: string
@@ -45,12 +66,28 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
   let generalRecommendation: string
   let memberRecommendationB: string
 
+  // Probe whether the current session role can SET ROLE to `role`.
+  async function canSetRole(role: TestRole): Promise<boolean> {
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(`SET LOCAL ROLE ${role}`)
+      return true
+    } catch {
+      return false
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined)
+      client.release()
+    }
+  }
+
   // Run a callback as a Data API role carrying the given JWT subject (or no
   // JWT at all). Everything happens inside a transaction that is always
   // rolled back, so read fixtures stay intact and write attempts leave no
-  // residue.
+  // residue. The helper VERIFIES the role switch took effect — a failure to
+  // assume the role is a test-setup error, never an RLS result.
   async function asRole<R>(
-    role: 'authenticated' | 'anonymous',
+    role: TestRole,
     sub: string | null,
     fn: (c: PoolClient) => Promise<R>
   ): Promise<R> {
@@ -62,7 +99,19 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
           JSON.stringify({ sub }),
         ])
       }
-      await client.query(`SET LOCAL ROLE ${role}`)
+      try {
+        await client.query(`SET LOCAL ROLE ${role}`)
+      } catch (cause) {
+        throw new Error(
+          `RLS test setup failed: database session could not assume role ${role} (${(cause as Error).message})`
+        )
+      }
+      const { rows } = await client.query('SELECT current_user AS cu')
+      if (rows[0].cu !== role) {
+        throw new Error(
+          `RLS test setup failed: database session could not assume role ${role} (current_user is ${rows[0].cu})`
+        )
+      }
       return await fn(client)
     } finally {
       await client.query('ROLLBACK').catch(() => undefined)
@@ -73,11 +122,56 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
   const asAuthenticated = <R>(sub: string | null, fn: (c: PoolClient) => Promise<R>) =>
     asRole('authenticated', sub, fn)
 
+  // Assert that a member-path write was rejected BY ROW-LEVEL SECURITY —
+  // right SQLSTATE (42501) and specifically the new-row policy violation
+  // message, so a role/grant failure can never masquerade as an RLS pass.
+  async function expectRlsWriteViolation(p: Promise<unknown>) {
+    let err: (Error & { code?: string }) | undefined
+    try {
+      await p
+    } catch (e) {
+      err = e as Error & { code?: string }
+    }
+    expect(err, 'expected the write to be rejected').toBeTruthy()
+    expect(err!.message).toMatch(/new row violates row-level security policy/i)
+    expect(err!.code).toBe('42501')
+  }
+
   beforeAll(async () => {
     neonConfig.webSocketConstructor = ws
     pool = new Pool({ connectionString: url })
 
-    // Privileged path (pool owner, covered by privileged_server_path).
+    // --- role-simulation bootstrap (test-only, development branch only) ---
+    const su = await pool.query('SELECT session_user AS su')
+    sessionRole = su.rows[0].su as string
+
+    for (const role of TEST_ROLES) {
+      if (await canSetRole(role)) continue
+      const branch = process.env.NEON_TARGET_BRANCH
+      const prodFlag = String(process.env.NEON_TARGET_IS_PRODUCTION ?? '').toLowerCase()
+      if (branch !== 'development' || prodFlag !== 'false') {
+        throw new Error(
+          `RLS test setup failed: database session could not assume role ${role}. ` +
+            `The suite only adjusts role membership when NEON_TARGET_BRANCH=development ` +
+            `and NEON_TARGET_IS_PRODUCTION=false are both set (never against production). ` +
+            `Set them for a disposable development branch, or grant the membership manually.`
+        )
+      }
+      // The session role created `authenticated`/`anonymous` in the RLS
+      // migration and therefore holds ADMIN OPTION on them, which authorizes
+      // granting (and later revoking) membership — including to itself.
+      // If that assumption is ever wrong on a given Postgres/Neon version,
+      // the GRANT or the re-probe below fails loudly as a setup error.
+      await pool.query(`GRANT ${role} TO ${quoteIdent(sessionRole)}`)
+      grantedByTest.push(role)
+      if (!(await canSetRole(role))) {
+        throw new Error(
+          `RLS test setup failed: database session could not assume role ${role} even after a test-scoped membership grant.`
+        )
+      }
+    }
+
+    // --- fixtures (privileged path; synthetic identities only) ---
     await pool.query(`DELETE FROM members WHERE email LIKE '%@example.invalid'`)
 
     const a = await pool.query(
@@ -149,13 +243,64 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
 
   afterAll(async () => {
     if (pool) {
-      // Cascades remove B's channel/thread/messages/watchlist rows.
+      // Cascades remove the synthetic members' channels/threads/messages/rows.
       await pool
         .query(`DELETE FROM members WHERE email LIKE '%@example.invalid'`)
         .catch(() => undefined)
+      // Revoke ONLY memberships this suite added (tracked above).
+      for (const role of grantedByTest) {
+        await pool
+          .query(`REVOKE ${role} FROM ${quoteIdent(sessionRole)}`)
+          .catch(() => undefined)
+      }
       await pool.end()
     }
   }, T)
+
+  // ------------------------------------------------------------------
+  // Setup diagnostics — prove the simulation machinery itself
+  // ------------------------------------------------------------------
+
+  it('diagnostic: session assumes authenticated; session_user stays the connection role', { timeout: T }, async () => {
+    const ids = await asRole('authenticated', null, async (c) =>
+      (await c.query('SELECT current_user AS cu, session_user AS su')).rows[0]
+    )
+    expect(ids.cu).toBe('authenticated')
+    expect(ids.su).toBe(sessionRole)
+    expect(ids.su).not.toBe('authenticated')
+  })
+
+  it('diagnostic: session assumes anonymous; session_user stays the connection role', { timeout: T }, async () => {
+    const ids = await asRole('anonymous', null, async (c) =>
+      (await c.query('SELECT current_user AS cu, session_user AS su')).rows[0]
+    )
+    expect(ids.cu).toBe('anonymous')
+    expect(ids.su).toBe(sessionRole)
+  })
+
+  it('diagnostic: connection-role properties recorded; no member-facing BYPASSRLS', { timeout: T }, async () => {
+    const props = await pool.query(
+      `SELECT rolname, rolsuper, rolbypassrls, rolcreaterole,
+              pg_has_role(session_user, 'authenticated', 'MEMBER') AS member_of_authenticated,
+              pg_has_role(session_user, 'anonymous', 'MEMBER') AS member_of_anonymous
+       FROM pg_roles WHERE rolname = session_user`
+    )
+    const p = props.rows[0]
+    // Role names only — never connection values.
+    console.log(
+      `[rls.db] connection role: ${p.rolname} | superuser: ${p.rolsuper} | bypassrls: ${p.rolbypassrls} | createrole: ${p.rolcreaterole} | member of authenticated: ${p.member_of_authenticated} | member of anonymous: ${p.member_of_anonymous} | memberships granted by this suite: ${grantedByTest.join(', ') || '(none)'}`
+    )
+    expect(p.rolbypassrls).toBe(false)
+
+    const bypass = await pool.query(
+      `SELECT rolname FROM pg_roles WHERE rolbypassrls AND rolname IN ('authenticated', 'anonymous')`
+    )
+    expect(bypass.rows).toHaveLength(0)
+  })
+
+  // ------------------------------------------------------------------
+  // Read isolation
+  // ------------------------------------------------------------------
 
   it('owner sees their private channel', { timeout: T }, async () => {
     const rows = await asAuthenticated(SUB_B, async (c) =>
@@ -238,8 +383,12 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
     expect(counts).toEqual({ members: 0, channels: 0, watchlist: 0 })
   })
 
+  // ------------------------------------------------------------------
+  // Write protection (RLS specifically — not role/grant noise)
+  // ------------------------------------------------------------------
+
   it('WITH CHECK blocks inserting rows for another member', { timeout: T }, async () => {
-    await expect(
+    await expectRlsWriteViolation(
       asAuthenticated(SUB_A, (c) =>
         c.query(
           `INSERT INTO watchlist_items (member_id, ticker, company_name, industry)
@@ -247,28 +396,48 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
           [memberB]
         )
       )
-    ).rejects.toThrow(/row-level security/i)
+    )
+    // Prove the row was never written (privileged read).
+    const check = await pool.query(
+      `SELECT count(*)::int AS n FROM watchlist_items WHERE member_id = $1 AND ticker = 'MSFT'`,
+      [memberB]
+    )
+    expect(check.rows[0].n).toBe(0)
   })
 
   it('ownership cannot be transferred through an update', { timeout: T }, async () => {
-    // B updates their OWN row (passes USING) but tries to hand it to A —
-    // the WITH CHECK on the new row must reject it.
-    await expect(
+    await expectRlsWriteViolation(
       asAuthenticated(SUB_B, (c) =>
         c.query(
           `UPDATE watchlist_items SET member_id = $1 WHERE member_id = $2 AND ticker = 'AAPL'`,
           [memberA, memberB]
         )
       )
-    ).rejects.toThrow(/row-level security/i)
+    )
+    // Prove ownership is unchanged.
+    const check = await pool.query(
+      `SELECT member_id FROM watchlist_items WHERE ticker = 'AAPL' AND member_id IN ($1, $2)`,
+      [memberA, memberB]
+    )
+    expect(check.rows).toHaveLength(1)
+    expect(check.rows[0].member_id).toBe(memberB)
   })
 
-  it('the anonymous role has no access to protected tables', { timeout: T }, async () => {
-    for (const table of ['members', 'channels', 'watchlist_items', 'option_contracts']) {
-      await expect(
-        asRole('anonymous', null, (c) => c.query(`SELECT count(*) FROM ${table}`))
-      ).rejects.toThrow(/permission denied/i)
-    }
+  it('inserting a non-user message via the member path is rejected', { timeout: T }, async () => {
+    await expectRlsWriteViolation(
+      asAuthenticated(SUB_B, (c) =>
+        c.query(
+          `INSERT INTO channel_messages (thread_id, channel_id, author_member_id, role, content)
+           VALUES ($1, $2, $3, 'assistant', 'spoofed AI message')`,
+          [threadB, privateChannelB, memberB]
+        )
+      )
+    )
+    const check = await pool.query(
+      `SELECT count(*)::int AS n FROM channel_messages WHERE thread_id = $1 AND role <> 'user'`,
+      [threadB]
+    )
+    expect(check.rows[0].n).toBe(0)
   })
 
   it('a member can insert their own rows', { timeout: T }, async () => {
@@ -290,18 +459,29 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
       ).rowCount
     )
     expect(updated).toBe(0)
+    const check = await pool.query(`SELECT display_name FROM members WHERE id = $1`, [memberB])
+    expect(check.rows[0].display_name).toBe('RLS Test Member')
   })
 
-  it('inserting a non-user message via the member path is rejected', { timeout: T }, async () => {
-    await expect(
-      asAuthenticated(SUB_B, (c) =>
-        c.query(
-          `INSERT INTO channel_messages (thread_id, channel_id, author_member_id, role, content)
-           VALUES ($1, $2, $3, 'assistant', 'spoofed AI message')`,
-          [threadB, privateChannelB, memberB]
-        )
-      )
-    ).rejects.toThrow(/row-level security/i)
+  // ------------------------------------------------------------------
+  // Anonymous and lifecycle
+  // ------------------------------------------------------------------
+
+  it('the anonymous role is denied on each protected table (table-level, not set-role noise)', { timeout: T }, async () => {
+    for (const table of ['members', 'channels', 'watchlist_items', 'option_contracts']) {
+      // asRole verifies current_user = 'anonymous' BEFORE the query runs, so
+      // the only error that can surface here is from the table access itself.
+      let err: (Error & { code?: string }) | undefined
+      try {
+        await asRole('anonymous', null, (c) => c.query(`SELECT count(*) FROM ${table}`))
+      } catch (e) {
+        err = e as Error & { code?: string }
+      }
+      expect(err, `expected SELECT on ${table} to be denied for anonymous`).toBeTruthy()
+      expect(err!.message).toMatch(new RegExp(`permission denied for table ${table}`, 'i'))
+      expect(err!.message).not.toMatch(/set role/i)
+      expect(err!.code).toBe('42501')
+    }
   })
 
   it('the privileged server role can perform authorized admin operations', { timeout: T }, async () => {
@@ -316,13 +496,6 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
     expect(upd.rowCount).toBe(1)
     const del = await pool.query(`DELETE FROM members WHERE id = $1`, [id])
     expect(del.rowCount).toBe(1)
-  })
-
-  it('member-facing Data API roles do not carry BYPASSRLS', { timeout: T }, async () => {
-    const res = await pool.query(
-      `SELECT rolname FROM pg_roles WHERE rolbypassrls AND rolname IN ('authenticated', 'anonymous')`
-    )
-    expect(res.rows).toHaveLength(0)
   })
 
   it('a disabled member loses all access', { timeout: T }, async () => {

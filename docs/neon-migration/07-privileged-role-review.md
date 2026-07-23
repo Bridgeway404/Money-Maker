@@ -82,6 +82,29 @@ each handler must, in order:
 The cutover PR must add tests for each route asserting a request cannot
 read or write another member's rows through the privileged path.
 
+## 6. Test-only role simulation (validation run 30032400037 follow-up)
+
+The first validation run failed with `permission denied to set role
+"authenticated"` (SQLSTATE 42501) on every member-path test: `SET ROLE`
+requires the session role to be a *member* of the target role (with the SET
+option since PostgreSQL 16), and creating a role does not by itself confer a
+SET-capable membership — the creating role is left holding ADMIN OPTION on
+it. Because it holds ADMIN OPTION, the connection role is authorized to
+grant and revoke membership in `authenticated`/`anonymous`, including to
+itself; the RLS suite now does exactly that, test-scoped:
+
+- only when `NEON_TARGET_BRANCH=development` and
+  `NEON_TARGET_IS_PRODUCTION=false` (otherwise it aborts with a setup error);
+- tracking each membership it added and revoking exactly those in teardown;
+- never granting `BYPASSRLS`;
+- verifying `current_user` actually switched before any assertion runs.
+
+This is a **test-environment** arrangement, not a production model change:
+in production the Data API connects *as* `authenticated`/`anonymous` — the
+server role never needs to SET ROLE into them. If the diagnostic tests show
+the membership assumption is wrong on some Postgres/Neon version, the suite
+fails loudly at setup rather than producing misleading RLS verdicts.
+
 ## Summary
 
 The privileged path stays: migrations and controlled jobs require it, and

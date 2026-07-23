@@ -48,3 +48,8 @@ final retirement step:
   UI, and now also enforced at the database layer (`option_contracts`
   requires `is_mock = true`; `recommendations.data_reliability` has no
   "live" value).
+- GitHub Actions runners print a "Node 20 is being deprecated" notice. That
+  refers to the runtime the runner uses for the `actions/*` helpers, not to
+  the `node-version: 20` our steps install, and it did not affect any run.
+  Moving the project and workflows to a newer Node LTS is bundled into the
+  Phase 1.5 upgrade — not into a migration fix.

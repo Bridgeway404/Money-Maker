@@ -58,3 +58,14 @@ development.
 `__tests__/rls.db.test.ts` runs only when `NEON_TEST_DATABASE_URL` is set
 (point it at a disposable Neon development branch, never production). Without
 that variable the suite is skipped, so CI stays green with no database.
+
+Role simulation: the suite runs its member-path queries as the real
+`authenticated`/`anonymous` roles via `SET LOCAL ROLE`, which requires the
+session role to hold a SET-capable membership in them. If that membership is
+missing (as on the first validation run — "permission denied to set role"),
+the suite grants it to the session role **only** when `NEON_TARGET_BRANCH=development`
+and `NEON_TARGET_IS_PRODUCTION=false` attest a disposable branch, tracks what
+it granted, and revokes exactly that in teardown. It refuses to touch role
+membership under any other target, and it never grants `BYPASSRLS` to
+anything. A failed role switch is reported as an explicit setup error, never
+misclassified as an RLS result.
