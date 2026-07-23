@@ -13,6 +13,7 @@ touches the production Neon branch or the running Supabase-backed app.
 | [04-data-migration-options.md](04-data-migration-options.md) | Option A (fresh start, recommended) vs. Option B (controlled migration, documented only) |
 | [05-manual-steps.md](05-manual-steps.md) | Michael's dashboard steps, staged: now / before preview / before production / not yet |
 | [06-rollback-and-retirement.md](06-rollback-and-retirement.md) | Rollback procedure, Supabase retirement checklist, known limitations |
+| [07-privileged-role-review.md](07-privileged-role-review.md) | Which role holds `privileged_server_path`, BYPASSRLS verification, why it must never become the member CRUD path |
 
 Implementation lives in:
 

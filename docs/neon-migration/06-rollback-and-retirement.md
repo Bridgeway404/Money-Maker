@@ -38,9 +38,11 @@ final retirement step:
 
 - Neon Auth SDK is beta (0.4.2-beta) and requires Next ≥ 16 — the entire app
   cutover is gated on Phase 1.5 (doc 02).
-- Nothing in this PR runs against a live database; the RLS suite and the
-  migration dry run execute only when `NEON_TEST_DATABASE_URL` /
-  `DATABASE_URL_UNPOOLED` are provided in a safe environment (doc 05 §A2).
+- Nothing in this PR runs against a live database from the workspace; the
+  RLS suite and the migration dry run execute only when
+  `NEON_TEST_DATABASE_URL` / `DATABASE_URL_UNPOOLED` are provided in a safe
+  environment — either locally (doc 05 §A2) or via the manually triggered
+  `Neon Development Validation` workflow (doc 05 §A5).
 - All market and option data remains **mock, sample, user-entered, or
   unverified** — unchanged by this migration, still labeled throughout the
   UI, and now also enforced at the database layer (`option_contracts`

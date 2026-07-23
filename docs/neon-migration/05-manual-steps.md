@@ -20,6 +20,33 @@ are needed. **Never paste secret values into chat, commits, or logs.**
    the PR review. Expect none of the app-facing roles.
 4. **Decide the data-migration option** (doc 04): check Supabase table row
    counts; approve Option A (fresh start) or request Option B.
+   Also confirm the pooled and unpooled connections use the same role
+   (doc 07 §2): run `SELECT current_user;` over each — same name expected.
+
+### A5. GitHub setup for the manual Neon validation workflow
+
+The workflow `.github/workflows/neon-development-validation.yml` runs the
+migration dry run, mock seed, and database-backed RLS tests against the Neon
+`development` branch. It triggers **only** manually. One-time setup:
+
+1. GitHub → repository → **Settings**.
+2. **Environments** → **New environment** → name it exactly `neon-development`.
+3. In that environment → **Environment secrets** → **Add secret** →
+   name exactly `NEON_TEST_DATABASE_URL`.
+4. Paste the **direct/unpooled** connection string of the Neon
+   `development` branch (Neon console → branch → Connect → uncheck
+   "Connection pooling"). Never paste it anywhere else.
+5. Optional but recommended: in the same environment, enable
+   **Required reviewers** and add yourself, so every run needs your
+   approval before it can read the secret.
+6. Repository → **Actions** tab.
+7. Select **Neon Development Validation** in the left sidebar.
+8. **Run workflow** → choose branch `feat/neon-migration`.
+9. Click **Run workflow** and watch the steps.
+10. Afterwards, skim the logs: the only database-related output should be
+    `target branch: development`, `production flag: false`, the run id, and
+    row **counts** — if anything resembling a connection string appears
+    (GitHub masks the secret as `***`), stop and rotate the credential.
 
 ## B. Required before preview testing (after the Phase 1.5 Next 16 upgrade)
 
