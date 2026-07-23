@@ -1,0 +1,126 @@
+# Manual validation of the Neon migration foundation against the Neon
+# `development` branch. See docs/neon-migration/05-manual-steps.md §A5 for the
+# one-time GitHub setup (environment + secret) and how to run this.
+#
+# Security posture:
+#  - workflow_dispatch ONLY — never runs on push, pull_request, or a schedule.
+#  - The connection string comes exclusively from the `neon-development`
+#    GitHub Environment secret NEON_TEST_DATABASE_URL and is never echoed,
+#    transformed, or partially displayed (GitHub also masks it in logs).
+#  - The secret is scoped to the individual steps that need it, not the job.
+#  - Targets are pinned: NEON_TARGET_BRANCH=development,
+#    NEON_TARGET_IS_PRODUCTION=false; the production override is NOT set, so
+#    scripts/migrate.mjs would refuse a production target anyway.
+name: Neon Development Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: neon-development-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    environment: neon-development
+    env:
+      NEON_TARGET_BRANCH: development
+      NEON_TARGET_IS_PRODUCTION: 'false'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests (no database)
+        # NEON_TEST_DATABASE_URL is deliberately absent here, so the
+        # database-backed suite is skipped; it runs against the development
+        # branch in a dedicated step below.
+        run: npm test
+
+      - name: Drizzle schema check
+        run: npm run db:check
+
+      - name: Safety checks
+        env:
+          HAS_DB_SECRET: ${{ secrets.NEON_TEST_DATABASE_URL != '' }}
+        run: |
+          echo "workflow run id: ${GITHUB_RUN_ID}"
+          echo "target branch: ${NEON_TARGET_BRANCH}"
+          echo "production flag: ${NEON_TARGET_IS_PRODUCTION}"
+          if [ "${HAS_DB_SECRET}" != "true" ]; then
+            echo "::error::NEON_TEST_DATABASE_URL is not configured on the neon-development environment (Settings -> Environments -> neon-development -> secrets)."
+            exit 1
+          fi
+          if [ "${NEON_TARGET_BRANCH}" != "development" ]; then
+            echo "::error::NEON_TARGET_BRANCH must be exactly 'development'."
+            exit 1
+          fi
+          if [ "${NEON_TARGET_IS_PRODUCTION}" != "false" ]; then
+            echo "::error::NEON_TARGET_IS_PRODUCTION must be exactly 'false'."
+            exit 1
+          fi
+          if [ -n "${ALLOW_PRODUCTION_MIGRATION:-}" ]; then
+            echo "::error::The production override must not be set in this workflow."
+            exit 1
+          fi
+          echo "safety checks passed"
+
+      - name: Guard refuses production names (placeholder URL, no connection made)
+        env:
+          # A syntactically-present placeholder so the guard reaches the
+          # branch-name check; the guard exits before anything could connect.
+          DATABASE_URL_UNPOOLED: placeholder-not-a-real-connection-string
+          NEON_TARGET_BRANCH: production
+        run: |
+          if node scripts/migrate.mjs; then
+            echo "::error::migration guard FAILED to refuse a production branch name"
+            exit 1
+          fi
+          echo "guard correctly refused the production branch name"
+
+      - name: Guarded migration (development branch)
+        env:
+          DATABASE_URL_UNPOOLED: ${{ secrets.NEON_TEST_DATABASE_URL }}
+        run: npm run db:migrate
+
+      - name: Mock-only seed
+        env:
+          DATABASE_URL_UNPOOLED: ${{ secrets.NEON_TEST_DATABASE_URL }}
+        run: npm run db:seed
+
+      - name: Seed idempotency (re-run seed, then verify counts)
+        env:
+          DATABASE_URL_UNPOOLED: ${{ secrets.NEON_TEST_DATABASE_URL }}
+        run: |
+          npm run db:seed
+          node scripts/verify-seed.mjs
+
+      - name: Database-backed RLS tests
+        env:
+          NEON_TEST_DATABASE_URL: ${{ secrets.NEON_TEST_DATABASE_URL }}
+        run: npx vitest run drizzle/__tests__/rls.db.test.ts
+
+      - name: Production build
+        run: npm run build
+
+      - name: Audit (report only)
+        run: npm audit --audit-level=high || true
