@@ -14,14 +14,20 @@ function walk(dir: string): string[] {
 }
 
 const repoRoot = join(__dirname, '..', '..')
-const srcFiles = walk(join(repoRoot, 'src')).filter((f) => /\.(ts|tsx)$/.test(f))
+// Test files are never bundled; the scan covers runtime source only.
+const srcFiles = walk(join(repoRoot, 'src')).filter(
+  (f) => /\.(ts|tsx)$/.test(f) && !/\.test\.tsx?$/.test(f) && !f.includes('__tests__')
+)
 
 const FORBIDDEN_IN_SRC = [
   'DATABASE_URL',
   'DATABASE_URL_UNPOOLED',
   'NEON_AUTH_COOKIE_SECRET',
   '@neondatabase/serverless',
+  '@neondatabase/auth',
   'drizzle-orm',
+  'drizzle/migrations',
+  'SUPABASE_SERVICE_ROLE',
 ]
 
 describe('client/bundle safety', () => {
