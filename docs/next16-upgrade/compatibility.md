@@ -65,10 +65,22 @@ No canary or RC packages anywhere.
   removed React 18 APIs. `forwardRef` (5 UI components) remains supported
   in React 19 (deprecated in favor of ref-as-prop, but not removed —
   no change needed or made).
-- `@supabase/ssr` 0.12.x: the repo already uses the modern
-  `getAll`/`setAll` cookie contract in all three integration points
-  (server client, browser client, middleware), which is exactly the API
-  0.12.x requires — no code change expected beyond the version bump.
+- `@supabase/ssr` 0.12.x: the repo already used the modern
+  `getAll`/`setAll` cookie contract in all three integration points, so no
+  deprecated storage methods needed migrating. **However, the bump did
+  require response-handling adaptation** (route behavior itself was
+  unchanged): since 0.10, `setAll` receives a **second argument** — headers
+  (`Cache-Control: private, no-cache, no-store, must-revalidate, max-age=0`,
+  `Expires: 0`, `Pragma: no-cache`) that must be set on any response that
+  writes auth cookies, so a CDN can never cache one user's session for
+  another. The proxy now records the exact refreshed-cookie records and
+  those supplied headers (`src/lib/auth/supabase-auth-state.ts`) and applies
+  both to the pass-through response **and to every redirect response** —
+  previously redirects were fresh `NextResponse.redirect(...)` objects that
+  silently dropped the refreshed cookies and headers, risking cached auth
+  responses and browser/server session drift (premature logout, redirect
+  loops). Only Supabase-supplied state is copied onto redirects — never
+  arbitrary internal Next.js middleware headers.
 
 ## @neondatabase/auth — documentation only (NOT added in this PR)
 

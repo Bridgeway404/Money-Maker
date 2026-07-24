@@ -25,14 +25,31 @@ describe('Next.js 16 conventions', () => {
     expect(proxy).toContain('export async function proxy(')
     expect(proxy).toContain('createServerClient')
     expect(proxy).toContain('auth.getUser()')
-    expect(proxy).toContain('getAll()')
-    expect(proxy).toContain('setAll(')
     expect(proxy).toContain("from '@/lib/auth/route-access'")
     expect(proxy).toContain("loginUrl.searchParams.set('redirectTo'")
     // Matcher unchanged from the Next 14 middleware.
     expect(proxy).toContain(
       "'/((?!_next/static|_next/image|favicon.ico|.*\\\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'"
     )
+  })
+
+  it('the proxy uses only the modern cookie contract: getAll + two-argument setAll', () => {
+    const proxy = read('src/proxy.ts')
+    expect(proxy).toContain('getAll()')
+    // @supabase/ssr >= 0.10: setAll(cookies, headers) — the second argument
+    // carries cache-protection headers that MUST reach the response.
+    expect(proxy).toMatch(/setAll\(\s*\n?\s*cookiesToSet[^)]*headers: Record<string, string>/)
+    // No deprecated individual storage methods.
+    expect(proxy).not.toMatch(/cookies:\s*{\s*get\(/)
+    expect(proxy).not.toMatch(/\bremove\(/)
+  })
+
+  it('every redirect return path carries the refreshed Supabase auth state', () => {
+    const proxy = read('src/proxy.ts')
+    const redirects = proxy.match(/NextResponse\.redirect/g) ?? []
+    const wrapped = proxy.match(/applySupabaseAuthState\(\s*\n?\s*NextResponse\.redirect/g) ?? []
+    expect(redirects.length).toBeGreaterThan(0)
+    expect(wrapped.length).toBe(redirects.length)
   })
 
   it('async request APIs: the Supabase server client awaits cookies()', () => {
