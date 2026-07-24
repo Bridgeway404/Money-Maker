@@ -52,10 +52,6 @@ export default function ResearchTickerPage({ params }: PageProps) {
 
   const supabase = createClient()
 
-  useEffect(() => {
-    loadExistingReport()
-  }, [ticker])
-
   async function loadExistingReport() {
     setLoading(true)
     const { data } = await supabase
@@ -69,6 +65,12 @@ export default function ResearchTickerPage({ params }: PageProps) {
     setReport(data ?? null)
     setLoading(false)
   }
+
+  useEffect(() => {
+    loadExistingReport()
+  }, [ticker])
+
+
 
   async function generateReport() {
     if (!mockCompany && !upperTicker) return

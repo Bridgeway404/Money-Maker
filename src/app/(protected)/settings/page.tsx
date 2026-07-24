@@ -86,10 +86,6 @@ export default function SettingsPage() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    loadSettings()
-  }, [])
-
   async function loadSettings() {
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
@@ -113,6 +109,12 @@ export default function SettingsPage() {
     }
     setLoading(false)
   }
+
+  useEffect(() => {
+    loadSettings()
+  }, [])
+
+
 
   async function handleSave() {
     setSaveError(null)

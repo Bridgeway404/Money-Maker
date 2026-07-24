@@ -1,18 +1,14 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { decideRoute } from '@/lib/auth/route-access'
 
-const PROTECTED_PATHS = [
-  '/dashboard',
-  '/onboarding',
-  '/watchlist',
-  '/portfolio',
-  '/screener',
-  '/research',
-  '/leaps',
-  '/settings',
-]
+// Next.js 16 proxy (the renamed middleware convention). Behavior is
+// identical to the previous middleware.ts: refresh the Supabase session on
+// every matched request (auth.getUser() writes refreshed auth cookies back
+// onto the response via the getAll/setAll contract), then apply the route
+// rules in src/lib/auth/route-access.ts.
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
 
   const supabase = createServerClient(
@@ -40,16 +36,15 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  const pathname = request.nextUrl.pathname
-  const isProtected = PROTECTED_PATHS.some((p) => pathname.startsWith(p))
+  const decision = decideRoute(request.nextUrl.pathname, Boolean(user))
 
-  if (!user && isProtected) {
+  if (decision.action === 'redirect-login') {
     const loginUrl = new URL('/login', request.url)
-    loginUrl.searchParams.set('redirectTo', pathname)
+    loginUrl.searchParams.set('redirectTo', decision.redirectTo)
     return NextResponse.redirect(loginUrl)
   }
 
-  if (user && (pathname === '/login' || pathname === '/signup')) {
+  if (decision.action === 'redirect-dashboard') {
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 

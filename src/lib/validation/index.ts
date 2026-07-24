@@ -52,7 +52,7 @@ function fail(error: string): { ok: false; error: string } {
 function str(v: unknown, max: number): string {
   if (typeof v !== 'string') return ''
   // Strip control characters, trim, and clip.
-  // eslint-disable-next-line no-control-regex
+   
   return v.replace(/[\u0000-\u001F\u007F]/g, ' ').trim().slice(0, max)
 }
 
