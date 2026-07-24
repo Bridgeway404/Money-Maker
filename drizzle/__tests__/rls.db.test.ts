@@ -31,6 +31,13 @@ import {
 // duration of the suite, and the suite refuses to touch role membership
 // anywhere else. No role ever receives BYPASSRLS.
 //
+// THREE-ROLE MODEL (doc 07): the Neon owner role (migrations only; carries
+// BYPASSRLS as provisioned by Neon — nothing it does proves RLS), the
+// member-facing Data API roles authenticated/anonymous (never bypass RLS),
+// and iop_server (non-bypass server-job role whose access is the declared
+// server_job_path policy). Owner-level DATABASE_URL credentials must not be
+// used for ordinary member-owned CRUD.
+//
 // SCOPE OF PROOF — what this suite does and does not validate:
 //  * VALIDATED NOW (Postgres role/claim simulation): the suite assumes the
 //    Postgres session role (`authenticated` / `anonymous`) and injects JWT
@@ -53,8 +60,13 @@ const EMAIL_A = 'rls-test-admin@example.invalid'
 const EMAIL_B = 'rls-test-member@example.invalid'
 const EMAIL_C = 'rls-test-lifecycle@example.invalid'
 
+// Roles the suite may grant itself membership in (test-scoped, dev only).
 const TEST_ROLES = ['authenticated', 'anonymous'] as const
 type TestRole = (typeof TEST_ROLES)[number]
+// Roles the suite can assume. iop_server membership is NOT test-scoped — it
+// is granted permanently to the migration role by 0003 (architecture, not
+// test setup), so it is probed but never granted/revoked here.
+type AssumableRole = TestRole | 'iop_server'
 
 const T = 30_000
 
@@ -74,7 +86,7 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
   let memberRecommendationB: string
 
   // Probe whether the current session role can SET ROLE to `role`.
-  async function canSetRole(role: TestRole): Promise<boolean> {
+  async function canSetRole(role: AssumableRole): Promise<boolean> {
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
@@ -94,7 +106,7 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
   // residue. The helper VERIFIES the role switch took effect — a failure to
   // assume the role is a test-setup error, never an RLS result.
   async function asRole<R>(
-    role: TestRole,
+    role: AssumableRole,
     sub: string | null,
     fn: (c: PoolClient) => Promise<R>
   ): Promise<R> {
@@ -186,6 +198,15 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
           `RLS test setup failed: database session could not assume role ${role} even after a test-scoped membership grant.`
         )
       }
+    }
+
+    // iop_server membership is architectural (granted to the migration role
+    // by 0003), not test-scoped — probe only, never grant or revoke here.
+    if (!(await canSetRole('iop_server'))) {
+      throw new Error(
+        'RLS test setup failed: database session cannot SET ROLE iop_server. ' +
+          'Has migration 0003_server_role_separation been applied to this branch (npm run db:migrate)?'
+      )
     }
 
     // --- fixtures (privileged path; synthetic identities only) ---
@@ -334,12 +355,65 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
     console.log(
       `[rls.db] memberships pre-existing before this run (left alone; on a dev branch these are likely residue of an earlier failed run and safe to revoke manually): ${preExistingMemberships.join(', ') || '(none)'} | granted by this run (revoked in teardown): ${grantedByTest.join(', ') || '(none)'}`
     )
-    expect(p.rolbypassrls).toBe(false)
 
-    const bypass = await pool.query(
-      `SELECT rolname FROM pg_roles WHERE rolbypassrls AND rolname IN ('authenticated', 'anonymous')`
+    // The Neon owner/migration role may legitimately carry BYPASSRLS (run
+    // 30061768777 confirmed neondb_owner does) — its attributes are
+    // RECORDED above, not constrained. What member privacy depends on is
+    // that the member-facing Data API roles and the server-job role never
+    // bypass RLS and are never superusers.
+    const facing = await pool.query(
+      `SELECT rolname, rolbypassrls, rolsuper FROM pg_roles
+       WHERE rolname IN ('authenticated', 'anonymous', 'iop_server')
+       ORDER BY rolname`
     )
-    expect(bypass.rows).toHaveLength(0)
+    expect(facing.rows.map((r) => r.rolname)).toEqual(['anonymous', 'authenticated', 'iop_server'])
+    for (const r of facing.rows) {
+      expect(r.rolbypassrls, `${r.rolname} must not have BYPASSRLS`).toBe(false)
+      expect(r.rolsuper, `${r.rolname} must not be a superuser`).toBe(false)
+    }
+  })
+
+  it('assumed authenticated stays fully subject to RLS even when session_user holds BYPASSRLS', { timeout: T }, async () => {
+    // BYPASSRLS is evaluated against current_user, not session_user: after
+    // SET LOCAL ROLE authenticated, the session's owner-level attribute must
+    // not leak into policy evaluation. Proven by a prohibited cross-member
+    // read staying denied.
+    const sessionAttrs = await pool.query(
+      `SELECT rolbypassrls FROM pg_roles WHERE rolname = session_user`
+    )
+    console.log(
+      `[rls.db] session role BYPASSRLS while running assumed-role tests: ${sessionAttrs.rows[0].rolbypassrls}`
+    )
+    const rows = await asAuthenticated(SUB_A, async (c) => {
+      const ids = (await c.query('SELECT current_user AS cu, session_user AS su')).rows[0]
+      expect(ids.cu).toBe('authenticated')
+      expect(ids.su).toBe(sessionRole)
+      return (await c.query(`SELECT id FROM watchlist_items WHERE member_id = $1`, [memberB])).rows
+    })
+    expect(rows).toHaveLength(0)
+  })
+
+  it('auth.user_id() tolerates the empty-string reset value of the claims GUC (regression: run 30061768777)', { timeout: T }, async () => {
+    // Reproduce the exact failure state: a transaction-local set_config on
+    // this connection is rolled back, leaving the GUC's session reset value
+    // as '' rather than NULL. The 0001 fallback cast to ::json before
+    // null-checking and raised 22P02; the 0003 definition nullifs first.
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query("SELECT set_config('request.jwt.claims', $1, true)", [
+        JSON.stringify({ sub: 'guc-reset-probe' }),
+      ])
+      await client.query('ROLLBACK')
+      await client.query('BEGIN')
+      await client.query('SET LOCAL ROLE authenticated')
+      const rows = (await client.query('SELECT count(*)::int AS n FROM members')).rows
+      expect(rows[0].n).toBe(0) // no JWT -> zero rows, and no json error
+      await client.query('ROLLBACK')
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined)
+      client.release()
+    }
   })
 
   // ------------------------------------------------------------------
@@ -528,9 +602,11 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
     }
   })
 
-  it('the privileged server role can perform authorized admin operations', { timeout: T }, async () => {
-    // The pool connects as the migration/owner role; FORCE RLS applies to it
-    // and access flows through the declared privileged_server_path policy.
+  it('the migration/owner credential can perform administrative operations (does NOT prove RLS policies — owner may hold BYPASSRLS)', { timeout: T }, async () => {
+    // The pool connects as the Neon owner role, which run 30061768777
+    // confirmed carries BYPASSRLS. Success here verifies only that the
+    // migration credential works for admin operations; the declared-policy
+    // path is proven by the iop_server test below.
     const ins = await pool.query(
       `INSERT INTO members (email, display_name, role, status)
        VALUES ('rls-test-priv@example.invalid', 'Priv Fixture', 'member', 'invited') RETURNING id`
@@ -540,6 +616,35 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
     expect(upd.rowCount).toBe(1)
     const del = await pool.query(`DELETE FROM members WHERE id = $1`, [id])
     expect(del.rowCount).toBe(1)
+  })
+
+  it('server_job_path: iop_server (non-bypass) performs authorized operations under RLS; DDL outside its grants is denied', { timeout: T }, async () => {
+    await asRole('iop_server', null, async (c) => {
+      const ids = (await c.query('SELECT current_user AS cu')).rows[0]
+      expect(ids.cu).toBe('iop_server')
+      const attrs = (
+        await c.query(`SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = 'iop_server'`)
+      ).rows[0]
+      expect(attrs.rolbypassrls).toBe(false)
+      expect(attrs.rolsuper).toBe(false)
+
+      // FORCE RLS applies to iop_server; these succeed ONLY via the declared
+      // server_job_path policy — this is the real privileged-policy proof.
+      const count = (await c.query('SELECT count(*)::int AS n FROM members')).rows[0].n
+      expect(count).toBeGreaterThanOrEqual(2) // sees the synthetic fixtures
+
+      const ins = await c.query(
+        `INSERT INTO members (email, display_name, role, status)
+         VALUES ('rls-test-priv@example.invalid', 'Server Job Fixture', 'member', 'invited') RETURNING id`
+      )
+      const del = await c.query(`DELETE FROM members WHERE id = $1`, [ins.rows[0].id])
+      expect(del.rowCount).toBe(1)
+
+      // Outside its explicit grants: no DDL for the job role.
+      await expect(
+        c.query('CREATE TABLE iop_server_ddl_probe (id int)')
+      ).rejects.toThrow(/permission denied/i)
+    })
   })
 
   it('member-deletion policy: disable preserves authorship; hard delete with surviving user messages is rejected', { timeout: T }, async () => {

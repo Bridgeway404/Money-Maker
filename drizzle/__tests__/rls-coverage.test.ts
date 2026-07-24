@@ -116,6 +116,30 @@ describe('RLS migration coverage', () => {
     expect(executable).not.toMatch(/on delete cascade/i)
   })
 
+  it('migration 0003 hardens auth.user_id() and creates a non-bypass server role', () => {
+    const m = readFileSync(join(migrationsDir, '0003_server_role_separation.sql'), 'utf8')
+    // nullif on the RAW GUC text before the ::json cast (22P02 regression).
+    expect(m).toContain(
+      "nullif(current_setting('request.jwt.claims', true), '')::json->>'sub'"
+    )
+    expect(m).toContain(
+      'CREATE ROLE iop_server NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS'
+    )
+    // Nothing in the migration grants BYPASSRLS (only the NOBYPASSRLS flag
+    // may mention the word in executable SQL).
+    const executable = m
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('--'))
+      .join('\n')
+    expect(executable.replace(/NOBYPASSRLS/g, '')).not.toMatch(/BYPASSRLS/)
+    // Every table is covered by the server_job_path policy loop.
+    const arrayBlock = m.match(/FOREACH t IN ARRAY ARRAY\[([\s\S]*?)\]/)?.[1] ?? ''
+    for (const t of tables) {
+      expect(arrayBlock, `${t} missing from server_job_path loop`).toContain(`'${t}'`)
+    }
+    expect(m).toContain('server_job_path')
+  })
+
   it('the data_reliability enum has no "live" value', () => {
     const enumLine = ddl.match(/CREATE TYPE "public"\."data_reliability" AS ENUM\((.*?)\);/)?.[1] ?? ''
     expect(enumLine).toContain("'mock'")

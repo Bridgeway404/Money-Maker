@@ -48,13 +48,18 @@ RLS so the Data API path cannot be widened by accident.
 ### RLS enforcement roles
 
 - `authenticated` / `anonymous` (created by Data API provisioning) — fully
-  subject to RLS; `anonymous` gets no grants on any IOP table.
-- The database owner role (used by migrations and the privileged Drizzle
-  path) — tables are created with `FORCE ROW LEVEL SECURITY`, and the
-  migration creates one **explicit, auditable** `privileged_server_path`
-  policy per table for the migration role, so owner access is a declared
-  policy rather than an implicit RLS bypass. Verifying that no role carries
-  `BYPASSRLS` is a manual step (doc 05): `select rolname from pg_roles where rolbypassrls;`
+  subject to RLS, no `BYPASSRLS`, no superuser (test-asserted); `anonymous`
+  gets no grants on any IOP table.
+- The database owner role (migrations only) — **confirmed to carry
+  `BYPASSRLS` as provisioned by Neon** (validation run 30061768777), so
+  nothing executed as the owner proves RLS behavior and owner-level
+  `DATABASE_URL` credentials must never serve member-owned CRUD (doc 07).
+- `iop_server` (migration 0003) — the non-bypass server-job role
+  (`NOLOGIN NOSUPERUSER NOBYPASSRLS`) with explicit table grants and an
+  explicit, auditable `server_job_path` policy per table under FORCE RLS.
+  Server processes assume it via `SET ROLE` for scheduled jobs and
+  controlled admin instead of acting as the BYPASSRLS owner. This is the
+  three-role model detailed in doc 07 §0.
 
 ## Decision 2 — Private-channel administration: **strict privacy model**
 

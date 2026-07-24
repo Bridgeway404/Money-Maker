@@ -49,9 +49,14 @@ development.
   privacy model, doc 03 Decision 2).
 - `option_contracts` is read-only shared data and its CHECK constraint
   requires `is_mock = true` until a real options provider exists.
-- The migration/owner role's access is a declared `privileged_server_path`
-  policy per table, not an implicit bypass. Confirm no role has `BYPASSRLS`
-  via doc 05 §A3.
+- Three-role model (doc 07 §0): the Neon owner role runs migrations only —
+  it carries `BYPASSRLS` as provisioned (confirmed on the dev branch), so
+  nothing it does proves RLS and it must never serve member CRUD.
+  `iop_server` (migration 0003, `NOLOGIN NOSUPERUSER NOBYPASSRLS`) is the
+  declared-policy path for server jobs/admin via `SET ROLE`, proven under
+  FORCE RLS by the live suite. Member privacy rests on
+  `authenticated`/`anonymous`/`iop_server` having no `BYPASSRLS`
+  (test-asserted).
 
 ## Database-backed tests
 

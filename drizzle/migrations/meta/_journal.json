@@ -22,6 +22,13 @@
       "when": 1784859615644,
       "tag": "0002_preserve_user_message_authors",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784860798288,
+      "tag": "0003_server_role_separation",
+      "breakpoints": true
     }
   ]
 }

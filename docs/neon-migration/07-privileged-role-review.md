@@ -1,5 +1,21 @@
 # Privileged Server Role — Review
 
+> **Owner-level `DATABASE_URL` credentials must not be used for ordinary
+> member-owned CRUD.** The Neon owner role carries `BYPASSRLS` (confirmed,
+> §3): any query it runs ignores every policy in this repository. Member
+> operations go through Neon Auth + Data API + `authenticated` RLS, or
+> through the deliberately assumed non-bypass `iop_server` role with
+> application-level ownership checks (§5). Neither connection string is ever
+> exposed to client code (test-enforced).
+
+## 0. Three-role model (confirmed by validation run 30061768777)
+
+| Role | Attributes (verified) | Purpose | Proves RLS? |
+|---|---|---|---|
+| `neondb_owner` (Neon connection role) | `rolsuper=false`, **`rolbypassrls=true`**, `rolcreaterole=true` | Migrations, schema/role changes, emergency admin | **Never** — BYPASSRLS ignores all policies |
+| `authenticated` / `anonymous` | no BYPASSRLS, no superuser (test-asserted) | Member-facing Data API access; `authenticated` scoped by JWT + active membership, `anonymous` denied on every protected table | Yes — the roles whose isolation results matter |
+| `iop_server` (migration 0003) | `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS` | Scheduled jobs and controlled server admin, assumed via `SET ROLE` from the owner connection | Yes — its access is the declared `server_job_path` policy under FORCE RLS |
+
 The RLS migration (`drizzle/migrations/0001_rls_policies.sql`) creates one
 `privileged_server_path` policy per table, `FOR ALL … USING (true) WITH CHECK
 (true)`, granted `TO current_user` **at migration time**. This document
@@ -17,10 +33,12 @@ SELECT DISTINCT polroles::regrole[] FROM pg_policy
 WHERE polname = 'privileged_server_path';
 ```
 
-Record the output in the PR review. If the migration is ever run by a
-different role than the one the server uses at runtime, the runtime role
-would have **no** policy and zero access (fail closed) — the fix is to re-run
-a migration (or add a policy) as/for the correct role, never to disable RLS.
+**Confirmed by run 30061768777: the connection role is `neondb_owner`.**
+Because that role holds BYPASSRLS (§3), the `privileged_server_path`
+policies bound to it are effectively inert for it — they remain harmless and
+documented, but the *meaningful* declared-policy path is now `iop_server` +
+`server_job_path` (migration 0003), which the live suite proves under FORCE
+RLS with a non-bypass role.
 
 ## 2. Do the pooled and unpooled connection strings use the same role?
 
@@ -38,16 +56,23 @@ runtime (pooled) role needs its own declared policy before cutover.
 
 ## 3. Does that role have BYPASSRLS?
 
-Expected: **no**. Neon does not give project roles `BYPASSRLS`, and the
-design depends on that: FORCE RLS + a declared policy is only meaningful if
-the owner cannot silently bypass it. Verified two ways:
+**Yes — confirmed.** Run 30061768777 recorded `neondb_owner` with
+`rolsuper=false`, **`rolbypassrls=true`**, `rolcreaterole=true`. (An earlier
+revision of this document expected "no"; that expectation was wrong — this
+is how Neon provisions the owner role, and it is not something we change.)
+Consequences, all now encoded in code and tests:
 
-- automatically: the live RLS suite asserts `authenticated`/`anonymous`
-  (the member-facing Data API roles) have no `BYPASSRLS`;
-- manually (doc 05 §A3): `SELECT rolname FROM pg_roles WHERE rolbypassrls;`
-  — the owner/migration role must not appear either. Note: a role with
-  `BYPASSRLS` would make `privileged_server_path` redundant but NOT widen
-  member access; the member-facing roles are the security boundary.
+- Nothing executed as the owner proves anything about RLS. The owner-path
+  live test is explicitly labeled accordingly.
+- BYPASSRLS attaches to **current_user**, not session_user: after
+  `SET LOCAL ROLE authenticated` / `iop_server`, policies fully apply — the
+  live suite proves a prohibited cross-member read stays denied even though
+  the session began as the BYPASSRLS owner.
+- The security boundary is the member-facing roles plus `iop_server`; the
+  live suite asserts none of the three has `BYPASSRLS` or superuser.
+- Manual check (doc 05 §A3) still applies: `SELECT rolname FROM pg_roles
+  WHERE rolbypassrls;` should list only the owner role — anything else
+  needs explanation before cutover.
 
 ## 4. Could ordinary member CRUD accidentally run through the privileged role?
 
@@ -58,11 +83,14 @@ scope it to a member. Nothing in this PR does that (no runtime code imports
 the driver — test-enforced by `client-bundle-safety.test.ts`), but after
 cutover the AI API routes will.
 
-**Rule (binding for the cutover PR):** the privileged connection is never
-the ordinary path for member-owned CRUD. Member-facing reads/writes go
-through the Data API with the member's JWT, where RLS enforces scope. The
-privileged path is reserved for: migrations, the seed, scheduled jobs,
-and admin operations (invitation management, member status/role changes).
+**Rule (binding for the cutover PR):** owner-level `DATABASE_URL`
+credentials must not be used for ordinary member-owned CRUD — with
+BYPASSRLS confirmed on the owner, such a query would silently ignore every
+policy. Member-facing reads/writes go through the Data API with the
+member's JWT, where RLS enforces scope. Server jobs and controlled admin
+run `SET ROLE iop_server` first (non-bypass, declared `server_job_path`
+policy) rather than acting as the raw owner; the raw owner connection is
+reserved for migrations, the seed, and emergencies.
 
 ## 5. Application-level ownership checks required after cutover
 
