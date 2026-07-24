@@ -3,7 +3,11 @@ import path from 'path'
 
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts'],
+    include: [
+      'src/**/*.test.ts',
+      'drizzle/**/*.test.ts',
+      'scripts/**/*.test.ts',
+    ],
     environment: 'node',
   },
   resolve: {
