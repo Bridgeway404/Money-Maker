@@ -176,9 +176,13 @@ export const conversationThreads = pgTable(
     channelId: uuid('channel_id')
       .notNull()
       .references(() => channels.id, { onDelete: 'cascade' }),
+    // NO ACTION (doc 03, Decision 5): a thread that survives its creator
+    // (e.g. in General) blocks hard-deleting the creator; a thread inside the
+    // member's own private channel is removed by the channel cascade in the
+    // same statement, so self-contained deletion still works.
     createdByMemberId: uuid('created_by_member_id')
       .notNull()
-      .references(() => members.id, { onDelete: 'cascade' }),
+      .references(() => members.id, { onDelete: 'no action' }),
     title: text('title').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -207,8 +211,14 @@ export const channelMessages = pgTable(
     channelId: uuid('channel_id')
       .notNull()
       .references(() => channels.id, { onDelete: 'cascade' }),
+    // NO ACTION (doc 03, Decision 5): user messages must keep their author
+    // (see the user_has_author CHECK below) — SET NULL contradicted that and
+    // made any member hard-delete fail (23514). Members are disabled/revoked,
+    // not deleted; a surviving user message blocks hard deletion, while
+    // messages in the member's own private channel cascade away with the
+    // channel inside the same statement.
     authorMemberId: uuid('author_member_id').references(() => members.id, {
-      onDelete: 'set null',
+      onDelete: 'no action',
     }),
     role: messageRole('role').notNull().default('user'),
     content: text('content').notNull(),

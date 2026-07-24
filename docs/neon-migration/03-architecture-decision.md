@@ -92,3 +92,29 @@ app is untouched. Cutover order after Phase 1.5:
    Drizzle; Supabase packages and env vars removed.
 4. `supabase/schema.sql` moves to `archive/` (it stays in place, marked
    legacy, until then — per plan §10 it may only move after parity + review).
+
+## Decision 5 — Member deletion policy: disable/revoke first, hard delete blocked by surviving content
+
+Members are lifecycle-managed through `status` (`invited → active →
+disabled/revoked`), not by deleting rows. The schema enforces the audit side
+of this (migration `0002_preserve_user_message_authors.sql`):
+
+- `channel_messages.author_member_id` and
+  `conversation_threads.created_by_member_id` are **ON DELETE NO ACTION**.
+  The original `SET NULL` on the author FK directly contradicted the
+  `channel_messages_user_has_author` CHECK (any hard delete of a member with
+  user messages failed with SQLSTATE 23514 — observed in validation run
+  30060811437), and the creator CASCADE could silently erase General-channel
+  threads including other members' replies.
+- Consequences: a member whose user messages or threads **survive** them
+  (General channel) cannot be hard-deleted — the FK rejects it (23503) and
+  history is preserved with authorship intact. A member whose content lives
+  entirely in their **own private channel** can still be deleted: the
+  channel's owner CASCADE removes channel → threads → messages within the
+  same statement, and NO ACTION (checked at end of statement, unlike
+  RESTRICT) then passes. Deleting a member also cascades their
+  recommendations (`created_by`) — one more reason hard delete is reserved
+  for content-free rows (e.g. a mistaken invitation); everyone else is
+  disabled or revoked.
+- Enforced by a live regression test (disable preserves authorship; hard
+  delete with surviving user messages is rejected; nothing is orphaned).

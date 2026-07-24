@@ -93,6 +93,29 @@ describe('RLS migration coverage', () => {
     expect(ddl).toContain('"option_contracts"."is_mock" = true')
   })
 
+  it('migration 0002 re-points the author/creator FKs to NO ACTION (member-deletion policy)', () => {
+    const fkMigration = readFileSync(
+      join(migrationsDir, '0002_preserve_user_message_authors.sql'),
+      'utf8'
+    )
+    for (const constraint of [
+      'channel_messages_author_member_id_members_id_fk',
+      'conversation_threads_created_by_member_id_members_id_fk',
+    ]) {
+      const add = fkMigration.match(
+        new RegExp(`ADD CONSTRAINT "${constraint}"[^;]+;`)
+      )?.[0]
+      expect(add, `${constraint} not re-added in 0002`).toBeTruthy()
+      expect(add).toContain('ON DELETE no action')
+    }
+    const executable = fkMigration
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('--'))
+      .join('\n')
+    expect(executable).not.toMatch(/on delete set null/i)
+    expect(executable).not.toMatch(/on delete cascade/i)
+  })
+
   it('the data_reliability enum has no "live" value', () => {
     const enumLine = ddl.match(/CREATE TYPE "public"\."data_reliability" AS ENUM\((.*?)\);/)?.[1] ?? ''
     expect(enumLine).toContain("'mock'")

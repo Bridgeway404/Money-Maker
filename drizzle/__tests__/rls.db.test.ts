@@ -2,6 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool, neonConfig } from '@neondatabase/serverless'
 import type { PoolClient } from '@neondatabase/serverless'
 import ws from 'ws'
+import {
+  cleanupSyntheticFixtures,
+  guardCleanupTarget,
+} from './helpers/synthetic-fixtures'
 
 // Database-backed RLS isolation tests.
 //
@@ -44,8 +48,10 @@ const url = process.env.NEON_TEST_DATABASE_URL
 
 const SUB_A = 'rls-test-sub-admin'
 const SUB_B = 'rls-test-sub-member'
+const SUB_C = 'rls-test-sub-lifecycle'
 const EMAIL_A = 'rls-test-admin@example.invalid'
 const EMAIL_B = 'rls-test-member@example.invalid'
+const EMAIL_C = 'rls-test-lifecycle@example.invalid'
 
 const TEST_ROLES = ['authenticated', 'anonymous'] as const
 type TestRole = (typeof TEST_ROLES)[number]
@@ -58,6 +64,7 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
   let pool: Pool
   let sessionRole: string // the Neon connection role (never printed with secrets — it is only a role name)
   const grantedByTest: TestRole[] = []
+  const preExistingMemberships: TestRole[] = []
   let memberA: string // active admin
   let memberB: string // active regular member
   let privateChannelA: string
@@ -138,6 +145,10 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
   }
 
   beforeAll(async () => {
+    // Refuse the whole suite, before any connection, if the attested target
+    // looks like production.
+    guardCleanupTarget(process.env)
+
     neonConfig.webSocketConstructor = ws
     pool = new Pool({ connectionString: url })
 
@@ -146,7 +157,13 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
     sessionRole = su.rows[0].su as string
 
     for (const role of TEST_ROLES) {
-      if (await canSetRole(role)) continue
+      if (await canSetRole(role)) {
+        // SET-capable before we did anything: either platform-provided or
+        // residue of an earlier suite run whose revoke did not land. Never
+        // revoked by this run (we only revoke what we grant).
+        preExistingMemberships.push(role)
+        continue
+      }
       const branch = process.env.NEON_TARGET_BRANCH
       const prodFlag = String(process.env.NEON_TARGET_IS_PRODUCTION ?? '').toLowerCase()
       if (branch !== 'development' || prodFlag !== 'false') {
@@ -172,7 +189,9 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
     }
 
     // --- fixtures (privileged path; synthetic identities only) ---
-    await pool.query(`DELETE FROM members WHERE email LIKE '%@example.invalid'`)
+    // Dependency-safe, exact-email cleanup of anything a previous (possibly
+    // failed) run left behind. Never a broad LIKE-delete on members.
+    await cleanupSyntheticFixtures(pool)
 
     const a = await pool.query(
       `INSERT INTO members (auth_user_id, email, display_name, role, status, accepted_at)
@@ -242,18 +261,38 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
   }, T)
 
   afterAll(async () => {
-    if (pool) {
-      // Cascades remove the synthetic members' channels/threads/messages/rows.
-      await pool
-        .query(`DELETE FROM members WHERE email LIKE '%@example.invalid'`)
-        .catch(() => undefined)
-      // Revoke ONLY memberships this suite added (tracked above).
-      for (const role of grantedByTest) {
-        await pool
-          .query(`REVOKE ${role} FROM ${quoteIdent(sessionRole)}`)
-          .catch(() => undefined)
+    if (!pool) return
+    // Three independent teardown stages: a failure in one must not skip the
+    // others, and problems are REPORTED (thrown at the end) instead of being
+    // silently swallowed — silent suppression is what left run 1's fixtures
+    // behind for run 2 to trip over. Postgres error messages contain no
+    // connection values.
+    const problems: string[] = []
+
+    try {
+      await cleanupSyntheticFixtures(pool)
+    } catch (e) {
+      problems.push(`fixture cleanup failed: ${(e as Error).message}`)
+    }
+
+    // Revoke ONLY memberships this suite added (tracked above) — never
+    // pre-existing ones, which are not ours to judge.
+    for (const role of grantedByTest) {
+      try {
+        await pool.query(`REVOKE ${role} FROM ${quoteIdent(sessionRole)}`)
+      } catch (e) {
+        problems.push(`revoking test-granted membership ${role} failed: ${(e as Error).message}`)
       }
+    }
+
+    try {
       await pool.end()
+    } catch (e) {
+      problems.push(`pool shutdown failed: ${(e as Error).message}`)
+    }
+
+    if (problems.length > 0) {
+      throw new Error(`RLS suite teardown problems: ${problems.join(' | ')}`)
     }
   }, T)
 
@@ -286,9 +325,14 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
        FROM pg_roles WHERE rolname = session_user`
     )
     const p = props.rows[0]
-    // Role names only — never connection values.
+    // Role names only — never connection values. Memberships are classified
+    // so a reviewer can tell residue of an earlier failed run (pre-existing,
+    // not revoked by us) apart from what this run added and will revoke.
     console.log(
-      `[rls.db] connection role: ${p.rolname} | superuser: ${p.rolsuper} | bypassrls: ${p.rolbypassrls} | createrole: ${p.rolcreaterole} | member of authenticated: ${p.member_of_authenticated} | member of anonymous: ${p.member_of_anonymous} | memberships granted by this suite: ${grantedByTest.join(', ') || '(none)'}`
+      `[rls.db] connection role: ${p.rolname} | superuser: ${p.rolsuper} | bypassrls: ${p.rolbypassrls} | createrole: ${p.rolcreaterole} | member of authenticated: ${p.member_of_authenticated} | member of anonymous: ${p.member_of_anonymous}`
+    )
+    console.log(
+      `[rls.db] memberships pre-existing before this run (left alone; on a dev branch these are likely residue of an earlier failed run and safe to revoke manually): ${preExistingMemberships.join(', ') || '(none)'} | granted by this run (revoked in teardown): ${grantedByTest.join(', ') || '(none)'}`
     )
     expect(p.rolbypassrls).toBe(false)
 
@@ -496,6 +540,65 @@ describe.skipIf(!url)('RLS isolation (live database)', () => {
     expect(upd.rowCount).toBe(1)
     const del = await pool.query(`DELETE FROM members WHERE id = $1`, [id])
     expect(del.rowCount).toBe(1)
+  })
+
+  it('member-deletion policy: disable preserves authorship; hard delete with surviving user messages is rejected', { timeout: T }, async () => {
+    // Member C authors a user message in a General-channel thread created by
+    // A — content that survives C, so C must not be hard-deletable.
+    const general = await pool.query(`SELECT id FROM channels WHERE type = 'general'`)
+    const generalId = general.rows[0].id
+
+    const c = await pool.query(
+      `INSERT INTO members (auth_user_id, email, display_name, role, status, accepted_at)
+       VALUES ($1, $2, 'RLS Lifecycle Fixture', 'member', 'active', now()) RETURNING id`,
+      [SUB_C, EMAIL_C]
+    )
+    const memberC = c.rows[0].id
+
+    const th = await pool.query(
+      `INSERT INTO conversation_threads (channel_id, created_by_member_id, title)
+       VALUES ($1, $2, 'Lifecycle thread') RETURNING id`,
+      [generalId, memberA]
+    )
+    const msg = await pool.query(
+      `INSERT INTO channel_messages (thread_id, channel_id, author_member_id, role, content)
+       VALUES ($1, $2, $3, 'user', 'lifecycle fixture message') RETURNING id`,
+      [th.rows[0].id, generalId, memberC]
+    )
+    const messageId = msg.rows[0].id
+
+    // 1. Disabling succeeds and authorship is preserved.
+    const disabled = await pool.query(
+      `UPDATE members SET status = 'disabled', disabled_at = now() WHERE id = $1`,
+      [memberC]
+    )
+    expect(disabled.rowCount).toBe(1)
+    const afterDisable = await pool.query(
+      `SELECT author_member_id FROM channel_messages WHERE id = $1`,
+      [messageId]
+    )
+    expect(afterDisable.rows[0].author_member_id).toBe(memberC)
+
+    // 2. Hard deletion is rejected by the author FK (23503), not silently
+    //    absorbed via SET NULL or cascade.
+    let err: (Error & { code?: string }) | undefined
+    try {
+      await pool.query(`DELETE FROM members WHERE id = $1`, [memberC])
+    } catch (e) {
+      err = e as Error & { code?: string }
+    }
+    expect(err, 'expected hard delete of a member with surviving user messages to fail').toBeTruthy()
+    expect(err!.code).toBe('23503')
+
+    // 3. Nothing was orphaned: the message still exists with its author.
+    const afterDelete = await pool.query(
+      `SELECT author_member_id FROM channel_messages WHERE id = $1`,
+      [messageId]
+    )
+    expect(afterDelete.rows).toHaveLength(1)
+    expect(afterDelete.rows[0].author_member_id).toBe(memberC)
+    // Fixture removal (message -> thread -> member C) happens via
+    // cleanupSyntheticFixtures in afterAll, in dependency-safe order.
   })
 
   it('a disabled member loses all access', { timeout: T }, async () => {

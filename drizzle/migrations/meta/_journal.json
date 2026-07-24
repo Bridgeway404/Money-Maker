@@ -15,6 +15,13 @@
       "when": 1784771714409,
       "tag": "0001_rls_policies",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784859615644,
+      "tag": "0002_preserve_user_message_authors",
+      "breakpoints": true
     }
   ]
 }
