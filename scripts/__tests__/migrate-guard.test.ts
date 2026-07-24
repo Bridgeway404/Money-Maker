@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+ 
 // @ts-ignore — plain .mjs module without type declarations
 import { evaluateGuard, OVERRIDE_VALUE } from '../lib/migrate-guard.mjs'
 

@@ -38,10 +38,6 @@ export default function LeapsTickerPage({ params }: PageProps) {
 
   const supabase = createClient()
 
-  useEffect(() => {
-    loadExistingRecommendation()
-  }, [ticker])
-
   async function loadExistingRecommendation() {
     setLoading(true)
     const { data } = await supabase
@@ -55,6 +51,12 @@ export default function LeapsTickerPage({ params }: PageProps) {
     setRecommendation(data ?? null)
     setLoading(false)
   }
+
+  useEffect(() => {
+    loadExistingRecommendation()
+  }, [ticker])
+
+
 
   async function generateRecommendations() {
     if (mockContracts.length === 0) {
